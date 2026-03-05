@@ -19,6 +19,7 @@ import {
   getUserByEmail,
   getUserById,
   updateUserLogin,
+  updateUserRole,
 } from '../db/database';
 import { logger } from '../middleware/logger';
 
@@ -53,9 +54,9 @@ const loginSchema = z.object({
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function signToken(userId: string, email: string, tier: string): string {
+function signToken(userId: string, email: string, tier: string, role: string = 'user'): string {
   return jwt.sign(
-    { sub: userId, email, tier },
+    { sub: userId, email, tier, role },
     JWT_SECRET,
     { expiresIn: JWT_EXPIRES_IN },
   );
@@ -173,9 +174,9 @@ router.post('/login', async (req: Request, res: Response) => {
     // Update last login
     updateUserLogin(user.id);
 
-    const token = signToken(user.id, user.email, user.tier);
+    const token = signToken(user.id, user.email, user.tier, user.role);
 
-    logger.info('User logged in', { userId: user.id, email });
+    logger.info('User logged in', { userId: user.id, email, role: user.role });
 
     res.json({
       success: true,
@@ -186,6 +187,7 @@ router.post('/login', async (req: Request, res: Response) => {
           email: user.email,
           name: user.name,
           tier: user.tier,
+          role: user.role,
           createdAt: user.createdAt,
           lastLoginAt: Date.now(),
         },
@@ -215,6 +217,7 @@ router.get('/me', requireAuth, (req: Request, res: Response) => {
       email: user.email,
       name: user.name,
       tier: user.tier,
+      role: user.role,
       stripeCustomerId: user.stripeCustomerId,
       createdAt: user.createdAt,
       lastLoginAt: user.lastLoginAt,
@@ -242,8 +245,81 @@ router.post('/refresh', requireAuth, (req: Request, res: Response) => {
     return;
   }
 
-  const token = signToken(user.id, user.email, user.tier);
+  const token = signToken(user.id, user.email, user.tier, user.role);
   res.json({ success: true, data: { token } });
+});
+
+// ─── POST /admin/create ─────────────────────────────────────────────────────
+// Create admin account — requires API_MASTER_KEY in X-Master-Key header
+
+router.post('/admin/create', async (req: Request, res: Response) => {
+  try {
+    const masterKey = process.env.API_MASTER_KEY;
+    const providedKey = req.headers['x-master-key'] as string;
+
+    if (!masterKey || !providedKey || providedKey !== masterKey) {
+      res.status(403).json({ success: false, error: 'Invalid or missing master key' });
+      return;
+    }
+
+    const parsed = registerSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        details: parsed.error.flatten().fieldErrors,
+      });
+      return;
+    }
+
+    const { email, password, name } = parsed.data;
+    const tier = (req.body.tier as string) || 'elite';
+
+    // Check if email already exists
+    const existing = getUserByEmail(email);
+    if (existing) {
+      // Promote existing user to admin
+      updateUserRole(existing.id, 'admin');
+      const token = signToken(existing.id, existing.email, tier, 'admin');
+      logger.info('Existing user promoted to admin', { userId: existing.id, email });
+      res.json({
+        success: true,
+        data: {
+          token,
+          user: { id: existing.id, email: existing.email, name: existing.name, tier, role: 'admin' },
+          message: 'Existing user promoted to admin',
+        },
+      });
+      return;
+    }
+
+    // Create new admin user
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const userId = uuid();
+    createUser(userId, email, passwordHash, name, 'admin', tier as any);
+
+    const token = signToken(userId, email, tier, 'admin');
+
+    logger.info('Admin user created', { userId, email });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        token,
+        user: {
+          id: userId,
+          email: email.toLowerCase().trim(),
+          name: name.trim(),
+          tier,
+          role: 'admin',
+          createdAt: Date.now(),
+        },
+      },
+    });
+  } catch (err: any) {
+    logger.error('Admin creation error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Admin creation failed' });
+  }
 });
 
 export default router;

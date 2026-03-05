@@ -81,6 +81,7 @@ function initSchema(db: Database.Database): void {
       password_hash TEXT NOT NULL,
       name TEXT NOT NULL DEFAULT '',
       tier TEXT NOT NULL DEFAULT 'standard',        -- standard | pro | elite
+      role TEXT NOT NULL DEFAULT 'user',             -- user | admin
       stripe_customer_id TEXT,
       stripe_subscription_id TEXT,
       created_at INTEGER NOT NULL,
@@ -186,6 +187,7 @@ export interface UserRecord {
   email: string;
   name: string;
   tier: 'standard' | 'pro' | 'elite';
+  role: 'user' | 'admin';
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
   createdAt: number;
@@ -200,6 +202,7 @@ function rowToUser(row: Record<string, unknown>): UserRecord {
     email: row.email as string,
     name: (row.name as string) ?? '',
     tier: (row.tier as 'standard' | 'pro' | 'elite') ?? 'standard',
+    role: (row.role as 'user' | 'admin') ?? 'user',
     stripeCustomerId: row.stripe_customer_id as string | null,
     stripeSubscriptionId: row.stripe_subscription_id as string | null,
     createdAt: row.created_at as number,
@@ -214,12 +217,20 @@ export function createUser(
   email: string,
   passwordHash: string,
   name: string,
+  role: 'user' | 'admin' = 'user',
+  tier: 'standard' | 'pro' | 'elite' = 'standard',
 ): void {
   getDb()
     .prepare(
-      'INSERT INTO users (id, email, password_hash, name, created_at) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO users (id, email, password_hash, name, role, tier, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     )
-    .run(id, email.toLowerCase().trim(), passwordHash, name.trim(), Date.now());
+    .run(id, email.toLowerCase().trim(), passwordHash, name.trim(), role, tier, Date.now());
+}
+
+export function updateUserRole(id: string, role: 'user' | 'admin'): void {
+  getDb()
+    .prepare('UPDATE users SET role = ? WHERE id = ?')
+    .run(role, id);
 }
 
 export function getUserByEmail(email: string): (UserRecord & { passwordHash: string }) | null {
