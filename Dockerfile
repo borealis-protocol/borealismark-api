@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt
 
 # Copy package files and install all deps (need devDeps for tsc)
 COPY package.json package-lock.json* ./
-RUN npm ci --production=false
+RUN npm install
 
 # Copy source and compile
 COPY tsconfig.json ./
