@@ -29,7 +29,7 @@ export const AGENT_PLANS: Record<string, StripePlan> = {
     interval: 'year',
     tier: 'pro',
     features: [
-      '3x CP multiplier',
+      '3x AP multiplier',
       'Priority support',
       'Enhanced analytics',
       'Custom badge styling',
@@ -44,7 +44,7 @@ export const AGENT_PLANS: Record<string, StripePlan> = {
     interval: 'year',
     tier: 'elite',
     features: [
-      '5x CP multiplier',
+      '5x AP multiplier',
       'Full analytics suite',
       'Priority support',
       'Advanced features',

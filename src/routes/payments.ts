@@ -378,7 +378,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
           email: session.customer_email,
           agentId: session.metadata?.agentId,
         });
-        // TODO: Activate subscription in DB, link agent to customer, upgrade CP multiplier
+        // TODO: Activate subscription in DB, link agent to customer, upgrade AP multiplier
         break;
       }
 
@@ -399,7 +399,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
           subscriptionId: sub.id,
           customerId: sub.customer,
         });
-        // TODO: Downgrade agent to free tier, reset CP multiplier
+        // TODO: Downgrade agent to free tier, reset AP multiplier
         break;
       }
 
