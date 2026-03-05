@@ -20,6 +20,14 @@
 import { v4 as uuid } from 'uuid';
 import { createHederaClient, type HCSConfig } from './hcs';
 import { logger } from '../middleware/logger';
+import {
+  saveUsdcInvoice,
+  getUsdcInvoice,
+  updateUsdcInvoiceStatus,
+  confirmUsdcInvoice as dbConfirmInvoice,
+  cleanupExpiredUsdcInvoices,
+  type UsdcInvoiceRecord,
+} from '../db/database';
 
 // ─── USDC Token Configuration ────────────────────────────────────────────────
 
@@ -83,10 +91,7 @@ export interface MirrorNodeTransaction {
   result: string;
 }
 
-// ─── In-Memory Invoice Store ─────────────────────────────────────────────────
-// TODO: Move to database for production
-
-const invoiceStore = new Map<string, PaymentInvoice>();
+// ─── Database-Backed Invoice Store ──────────────────────────────────────────
 
 // ─── Invoice Creation ────────────────────────────────────────────────────────
 
@@ -94,6 +99,7 @@ const invoiceStore = new Map<string, PaymentInvoice>();
  * Create a USDC payment invoice.
  * The client must send exactly the specified USDC amount to the treasury
  * account with the provided memo within the expiry window.
+ * Invoices are persisted to SQLite — survives server restarts.
  */
 export function createUsdcInvoice(
   planId: string,
@@ -112,6 +118,7 @@ export function createUsdcInvoice(
 
   // USDC is 1:1 with USD, 6 decimal places
   const amountUsdc = amountUsd.toFixed(USDC_DECIMALS);
+  const expiresAt = Date.now() + 30 * 60 * 1000; // 30 minutes
 
   const invoice: PaymentInvoice = {
     invoiceId,
@@ -121,14 +128,26 @@ export function createUsdcInvoice(
     treasuryAccountId: TREASURY_ACCOUNT_ID,
     tokenId: USDC_TOKEN_ID,
     memo,
-    expiresAt: Date.now() + 30 * 60 * 1000, // 30 minutes
+    expiresAt,
     createdAt: Date.now(),
     status: 'pending',
   };
 
-  invoiceStore.set(invoiceId, invoice);
+  // Persist to database
+  saveUsdcInvoice({
+    invoiceId,
+    planId,
+    email,
+    agentId,
+    amountUsd,
+    amountUsdc,
+    treasuryAccountId: TREASURY_ACCOUNT_ID,
+    tokenId: USDC_TOKEN_ID,
+    memo,
+    expiresAt,
+  });
 
-  logger.info('USDC invoice created', {
+  logger.info('USDC invoice created (persistent)', {
     invoiceId,
     planId,
     amountUsd,
@@ -142,19 +161,32 @@ export function createUsdcInvoice(
 
 // ─── Invoice Lookup ──────────────────────────────────────────────────────────
 
+/**
+ * Retrieve an invoice from the database.
+ * Returns in the PaymentInvoice shape for backward compatibility.
+ */
 export function getInvoice(invoiceId: string): PaymentInvoice | undefined {
-  return invoiceStore.get(invoiceId);
+  const row = getUsdcInvoice(invoiceId);
+  if (!row) return undefined;
+  return {
+    invoiceId: row.invoiceId,
+    planId: row.planId,
+    amountUsd: row.amountUsd,
+    amountUsdc: row.amountUsdc,
+    treasuryAccountId: row.treasuryAccountId,
+    tokenId: row.tokenId,
+    memo: row.memo,
+    expiresAt: row.expiresAt,
+    createdAt: row.createdAt,
+    status: row.status,
+  };
 }
 
 export function updateInvoiceStatus(
   invoiceId: string,
   status: PaymentInvoice['status'],
 ): void {
-  const invoice = invoiceStore.get(invoiceId);
-  if (invoice) {
-    invoice.status = status;
-    invoiceStore.set(invoiceId, invoice);
-  }
+  updateUsdcInvoiceStatus(invoiceId, status);
 }
 
 // ─── Mirror Node Verification ────────────────────────────────────────────────
@@ -172,7 +204,7 @@ export function updateInvoiceStatus(
 export async function verifyUsdcPayment(
   invoiceId: string,
 ): Promise<PaymentConfirmation | null> {
-  const invoice = invoiceStore.get(invoiceId);
+  const invoice = getInvoice(invoiceId);
   if (!invoice) {
     logger.warn('Invoice not found for verification', { invoiceId });
     return null;
@@ -350,14 +382,27 @@ export async function anchorPaymentReceiptOnHCS(
 // ─── Cleanup expired invoices (run periodically) ────────────────────────────
 
 export function cleanupExpiredInvoices(): number {
-  let cleaned = 0;
-  const now = Date.now();
-  for (const [id, invoice] of invoiceStore) {
-    if (invoice.status === 'pending' && now > invoice.expiresAt) {
-      invoice.status = 'expired';
-      invoiceStore.set(id, invoice);
-      cleaned++;
-    }
-  }
-  return cleaned;
+  return cleanupExpiredUsdcInvoices();
+}
+
+/**
+ * Get the full invoice record from the database (includes email, agentId, etc.)
+ * Use this when you need fields beyond the PaymentInvoice interface.
+ */
+export function getInvoiceRecord(invoiceId: string): UsdcInvoiceRecord | null {
+  return getUsdcInvoice(invoiceId);
+}
+
+/**
+ * Persist confirmation details to the database after Mirror Node verification.
+ */
+export function persistConfirmation(
+  invoiceId: string,
+  transactionId: string,
+  fromAccount: string,
+  consensusTimestamp: string,
+  hcsTopicId?: string,
+  hcsSequenceNumber?: number,
+): void {
+  dbConfirmInvoice(invoiceId, transactionId, fromAccount, consensusTimestamp, hcsTopicId, hcsSequenceNumber);
 }

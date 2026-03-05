@@ -14,6 +14,7 @@ import keysRouter from './routes/keys';
 import webhooksRouter from './routes/webhooks';
 import paymentsRouter from './routes/payments';
 import terminalRouter from './routes/terminal';
+import { cleanupExpiredInvoices } from './hedera/usdc';
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
@@ -131,6 +132,14 @@ app.use((err: Error, req: express.Request, res: express.Response, _next: express
 
 // Initialise DB (creates schema + seeds master key)
 getDb();
+
+// Clean up expired USDC invoices every 5 minutes
+setInterval(() => {
+  const cleaned = cleanupExpiredInvoices();
+  if (cleaned > 0) {
+    logger.info('Cleaned up expired USDC invoices', { count: cleaned });
+  }
+}, 5 * 60 * 1000);
 
 app.listen(PORT, () => {
   logger.info('BorealisMark Protocol API started', {

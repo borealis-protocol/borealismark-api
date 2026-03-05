@@ -19,10 +19,18 @@ import {
   updateInvoiceStatus,
   verifyUsdcPayment,
   anchorPaymentReceiptOnHCS,
+  getInvoiceRecord,
+  persistConfirmation,
   USDC_TOKEN_ID,
   TREASURY_ACCOUNT_ID,
 } from '../hedera/usdc';
 import { logger } from '../middleware/logger';
+import {
+  getUserByEmail,
+  updateUserTier,
+  updateUserStripe,
+  getUserByStripeCustomerId,
+} from '../db/database';
 
 const router = Router();
 
@@ -256,6 +264,53 @@ router.post('/usdc/verify/:invoiceId', async (req: Request, res: Response) => {
     // Payment confirmed — anchor on HCS
     const hcsReceipt = await anchorPaymentReceiptOnHCS(confirmation, invoice.planId);
 
+    // Persist full confirmation to database
+    persistConfirmation(
+      invoiceId,
+      confirmation.transactionId,
+      confirmation.fromAccount,
+      confirmation.consensusTimestamp,
+      hcsReceipt?.topicId,
+      hcsReceipt?.sequenceNumber,
+    );
+
+    // ── Activate subscription: upgrade user tier ──
+    const invoiceRecord = getInvoiceRecord(invoiceId);
+    let tierUpgraded = false;
+    let newTier: string | null = null;
+
+    if (invoiceRecord?.email) {
+      const user = getUserByEmail(invoiceRecord.email);
+      if (user) {
+        // Map plan ID to user tier
+        const planToTier: Record<string, 'standard' | 'pro' | 'elite'> = {
+          pro: 'pro',
+          elite: 'elite',
+          // API tiers also grant pro or elite dashboard access
+          starter: 'pro',
+          business: 'pro',
+          enterprise: 'elite',
+        };
+        const targetTier = planToTier[invoice.planId] ?? 'pro';
+        updateUserTier(user.id, targetTier);
+        tierUpgraded = true;
+        newTier = targetTier;
+        logger.info('User tier upgraded via USDC payment', {
+          userId: user.id,
+          email: invoiceRecord.email,
+          previousTier: user.tier,
+          newTier: targetTier,
+          planId: invoice.planId,
+          invoiceId,
+        });
+      } else {
+        logger.warn('USDC payment confirmed but user not found', {
+          email: invoiceRecord.email,
+          invoiceId,
+        });
+      }
+    }
+
     res.json({
       success: true,
       data: {
@@ -269,7 +324,11 @@ router.post('/usdc/verify/:invoiceId', async (req: Request, res: Response) => {
         planId: invoice.planId,
         hcsAnchored: !!hcsReceipt,
         hcsSequenceNumber: hcsReceipt?.sequenceNumber ?? null,
-        message: 'Payment confirmed and subscription activated',
+        tierUpgraded,
+        newTier,
+        message: tierUpgraded
+          ? `Payment confirmed — account upgraded to ${newTier}`
+          : 'Payment confirmed and subscription activated',
       },
       timestamp: Date.now(),
     });
@@ -372,13 +431,35 @@ router.post('/webhook', async (req: Request, res: Response) => {
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object as any;
+        const customerEmail = session.customer_email as string | undefined;
+        const customerId = session.customer as string | undefined;
+        const priceId = session.line_items?.data?.[0]?.price?.id;
+
         logger.info('Checkout completed', {
           sessionId: session.id,
-          customerId: session.customer,
-          email: session.customer_email,
+          customerId,
+          email: customerEmail,
           agentId: session.metadata?.agentId,
         });
-        // TODO: Activate subscription in DB, link agent to customer, upgrade AP multiplier
+
+        // Link Stripe customer to user and upgrade tier
+        if (customerEmail && customerId) {
+          const user = getUserByEmail(customerEmail);
+          if (user) {
+            updateUserStripe(user.id, customerId, session.subscription as string);
+            // Determine tier from plan
+            const plan = priceId ? getPlanByPriceId(priceId) : undefined;
+            const planToTier: Record<string, 'pro' | 'elite'> = {
+              pro: 'pro', elite: 'elite',
+              starter: 'pro', business: 'pro', enterprise: 'elite',
+            };
+            const targetTier = plan ? (planToTier[plan.tier] ?? 'pro') : 'pro';
+            updateUserTier(user.id, targetTier);
+            logger.info('Stripe checkout → tier upgraded', {
+              userId: user.id, newTier: targetTier, customerId,
+            });
+          }
+        }
         break;
       }
 
@@ -389,7 +470,21 @@ router.post('/webhook', async (req: Request, res: Response) => {
           status: sub.status,
           customerId: sub.customer,
         });
-        // TODO: Update subscription status in DB
+        // If subscription is active, ensure tier is current
+        if (sub.status === 'active' && sub.customer) {
+          const user = getUserByStripeCustomerId(sub.customer);
+          if (user) {
+            const priceId = sub.items?.data?.[0]?.price?.id;
+            const plan = priceId ? getPlanByPriceId(priceId) : undefined;
+            if (plan) {
+              const planToTier: Record<string, 'pro' | 'elite'> = {
+                pro: 'pro', elite: 'elite',
+                starter: 'pro', business: 'pro', enterprise: 'elite',
+              };
+              updateUserTier(user.id, planToTier[plan.tier] ?? 'pro');
+            }
+          }
+        }
         break;
       }
 
@@ -399,17 +494,28 @@ router.post('/webhook', async (req: Request, res: Response) => {
           subscriptionId: sub.id,
           customerId: sub.customer,
         });
-        // TODO: Downgrade agent to free tier, reset AP multiplier
+        // Downgrade to standard tier
+        if (sub.customer) {
+          const user = getUserByStripeCustomerId(sub.customer);
+          if (user) {
+            updateUserTier(user.id, 'standard');
+            logger.info('Stripe subscription cancelled → downgraded to standard', {
+              userId: user.id, customerId: sub.customer,
+            });
+          }
+        }
         break;
       }
 
       case 'invoice.payment_failed': {
-        const invoice = event.data.object as any;
+        const inv = event.data.object as any;
         logger.warn('Payment failed', {
-          invoiceId: invoice.id,
-          customerId: invoice.customer,
+          invoiceId: inv.id,
+          customerId: inv.customer,
         });
-        // TODO: Notify agent owner, grace period logic
+        // Grace period: don't downgrade immediately, just log
+        // After 3 failed attempts, Stripe will cancel the subscription
+        // which triggers customer.subscription.deleted above
         break;
       }
 

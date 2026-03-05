@@ -178,6 +178,62 @@ function initSchema(db: Database.Database): void {
       FOREIGN KEY (requester_agent_id) REFERENCES agents(id)
     );
 
+    -- ── USDC Invoices (persistent payment tracking) ─────────────────────────
+    CREATE TABLE IF NOT EXISTS usdc_invoices (
+      invoice_id TEXT PRIMARY KEY,
+      plan_id TEXT NOT NULL,
+      email TEXT,
+      agent_id TEXT,
+      amount_usd REAL NOT NULL,
+      amount_usdc TEXT NOT NULL,
+      treasury_account_id TEXT NOT NULL,
+      token_id TEXT NOT NULL,
+      memo TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      hedera_transaction_id TEXT,
+      from_account TEXT,
+      consensus_timestamp TEXT,
+      hcs_topic_id TEXT,
+      hcs_sequence_number INTEGER,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      confirmed_at INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_usdc_invoices_status ON usdc_invoices(status);
+    CREATE INDEX IF NOT EXISTS idx_usdc_invoices_email ON usdc_invoices(email);
+    CREATE INDEX IF NOT EXISTS idx_usdc_invoices_memo ON usdc_invoices(memo);
+
+    -- ── Contract Ratings (bidirectional) ──────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS contract_ratings (
+      id TEXT PRIMARY KEY,
+      contract_id TEXT NOT NULL,
+      rater_agent_id TEXT NOT NULL,
+      rated_agent_id TEXT NOT NULL,
+      rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+      comment TEXT,
+      hcs_transaction_id TEXT,
+      created_at INTEGER NOT NULL,
+      UNIQUE(contract_id, rater_agent_id),
+      FOREIGN KEY (contract_id) REFERENCES terminal_contracts(id)
+    );
+
+    -- ── Contract Deposits (escrow tracking) ───────────────────────────────────
+    CREATE TABLE IF NOT EXISTS contract_deposits (
+      id TEXT PRIMARY KEY,
+      contract_id TEXT NOT NULL,
+      party TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      amount_usdc REAL NOT NULL,
+      memo TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      hedera_transaction_id TEXT,
+      created_at INTEGER NOT NULL,
+      confirmed_at INTEGER,
+      FOREIGN KEY (contract_id) REFERENCES terminal_contracts(id),
+      FOREIGN KEY (agent_id) REFERENCES agents(id)
+    );
+
     -- ── Indices ──────────────────────────────────────────────────────────────
     CREATE INDEX IF NOT EXISTS idx_certs_agent ON audit_certificates(agent_id);
     CREATE INDEX IF NOT EXISTS idx_certs_issued ON audit_certificates(issued_at DESC);
@@ -319,6 +375,125 @@ export function getUserByStripeCustomerId(customerId: string): UserRecord | null
     .get(customerId) as Record<string, unknown> | undefined;
   if (!row) return null;
   return rowToUser(row);
+}
+
+// ─── USDC Invoice Queries ────────────────────────────────────────────────────
+
+export interface UsdcInvoiceRecord {
+  invoiceId: string;
+  planId: string;
+  email: string | null;
+  agentId: string | null;
+  amountUsd: number;
+  amountUsdc: string;
+  treasuryAccountId: string;
+  tokenId: string;
+  memo: string;
+  status: 'pending' | 'confirmed' | 'expired' | 'failed';
+  hederaTransactionId: string | null;
+  fromAccount: string | null;
+  consensusTimestamp: string | null;
+  hcsTopicId: string | null;
+  hcsSequenceNumber: number | null;
+  createdAt: number;
+  expiresAt: number;
+  confirmedAt: number | null;
+}
+
+export function saveUsdcInvoice(invoice: {
+  invoiceId: string;
+  planId: string;
+  email?: string;
+  agentId?: string;
+  amountUsd: number;
+  amountUsdc: string;
+  treasuryAccountId: string;
+  tokenId: string;
+  memo: string;
+  expiresAt: number;
+}): void {
+  getDb()
+    .prepare(
+      `INSERT INTO usdc_invoices
+        (invoice_id, plan_id, email, agent_id, amount_usd, amount_usdc,
+         treasury_account_id, token_id, memo, status, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+    )
+    .run(
+      invoice.invoiceId, invoice.planId, invoice.email ?? null, invoice.agentId ?? null,
+      invoice.amountUsd, invoice.amountUsdc, invoice.treasuryAccountId, invoice.tokenId,
+      invoice.memo, Date.now(), invoice.expiresAt,
+    );
+}
+
+export function getUsdcInvoice(invoiceId: string): UsdcInvoiceRecord | null {
+  const row = getDb()
+    .prepare('SELECT * FROM usdc_invoices WHERE invoice_id = ?')
+    .get(invoiceId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    invoiceId: row.invoice_id as string,
+    planId: row.plan_id as string,
+    email: row.email as string | null,
+    agentId: row.agent_id as string | null,
+    amountUsd: row.amount_usd as number,
+    amountUsdc: row.amount_usdc as string,
+    treasuryAccountId: row.treasury_account_id as string,
+    tokenId: row.token_id as string,
+    memo: row.memo as string,
+    status: row.status as UsdcInvoiceRecord['status'],
+    hederaTransactionId: row.hedera_transaction_id as string | null,
+    fromAccount: row.from_account as string | null,
+    consensusTimestamp: row.consensus_timestamp as string | null,
+    hcsTopicId: row.hcs_topic_id as string | null,
+    hcsSequenceNumber: row.hcs_sequence_number as number | null,
+    createdAt: row.created_at as number,
+    expiresAt: row.expires_at as number,
+    confirmedAt: row.confirmed_at as number | null,
+  };
+}
+
+export function updateUsdcInvoiceStatus(
+  invoiceId: string,
+  status: UsdcInvoiceRecord['status'],
+): void {
+  getDb()
+    .prepare('UPDATE usdc_invoices SET status = ? WHERE invoice_id = ?')
+    .run(status, invoiceId);
+}
+
+export function confirmUsdcInvoice(
+  invoiceId: string,
+  transactionId: string,
+  fromAccount: string,
+  consensusTimestamp: string,
+  hcsTopicId?: string,
+  hcsSequenceNumber?: number,
+): void {
+  getDb()
+    .prepare(
+      `UPDATE usdc_invoices SET
+        status = 'confirmed',
+        hedera_transaction_id = ?,
+        from_account = ?,
+        consensus_timestamp = ?,
+        hcs_topic_id = ?,
+        hcs_sequence_number = ?,
+        confirmed_at = ?
+       WHERE invoice_id = ?`,
+    )
+    .run(
+      transactionId, fromAccount, consensusTimestamp,
+      hcsTopicId ?? null, hcsSequenceNumber ?? null,
+      Date.now(), invoiceId,
+    );
+}
+
+export function cleanupExpiredUsdcInvoices(): number {
+  const result = getDb()
+    .prepare("UPDATE usdc_invoices SET status = 'expired' WHERE status = 'pending' AND expires_at < ?")
+    .run(Date.now());
+  return result.changes;
 }
 
 // ─── Agent Queries ────────────────────────────────────────────────────────────
