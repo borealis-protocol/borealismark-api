@@ -53,7 +53,11 @@ import {
   scanContent,
   getModerationStats,
 } from '../middleware/contentModeration';
-import { getUserById, getUserActiveListingCount } from '../db/database';
+import {
+  getActiveProhibitedItems,
+  addProhibitedItem,
+  removeProhibitedItem,
+} from '../db/database';
 
 const router = Router();
 
@@ -1360,7 +1364,6 @@ router.get('/moderation/prohibited', requireAuth, async (req: Request, res: Resp
       return res.status(403).json({ success: false, error: 'Admin access required' });
     }
 
-    const { getActiveProhibitedItems } = require('../db/database');
     const items = getActiveProhibitedItems();
 
     // Group by category
@@ -1407,7 +1410,6 @@ router.post('/moderation/prohibited', requireAuth, async (req: Request, res: Res
       return res.status(400).json({ success: false, error: 'severity must be block, flag, or warn' });
     }
 
-    const { addProhibitedItem } = require('../db/database');
     const id = uuid();
     addProhibitedItem(id, category, keyword, severity, description);
 
@@ -1433,7 +1435,6 @@ router.delete('/moderation/prohibited/:id', requireAuth, async (req: Request, re
       return res.status(403).json({ success: false, error: 'Admin access required' });
     }
 
-    const { removeProhibitedItem } = require('../db/database');
     const removed = removeProhibitedItem(req.params.id);
 
     if (!removed) {

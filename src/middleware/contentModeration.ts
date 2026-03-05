@@ -320,8 +320,9 @@ export function getModerationStats(): {
   totalFlags: number;
   recentActions: any[];
 } {
-  const { getDb: getDatabase } = require('../db/database');
-  const db = getDatabase();
+  // Import getDb dynamically to avoid circular dependency
+  const { getDb } = require('../db/database') as { getDb: () => any };
+  const db = getDb();
 
   const totalProhibitedItems = (
     db.prepare('SELECT COUNT(*) as c FROM prohibited_items WHERE active = 1').get() as { c: number }
