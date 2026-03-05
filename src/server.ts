@@ -45,9 +45,22 @@ app.use((_req, res, next) => {
 });
 
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? ['https://borealismark.com', 'https://www.borealismark.com', 'https://borealisterminal.com', 'https://www.borealisterminal.com', 'https://borealisprotocol.ai', 'https://www.borealisprotocol.ai']
-    : '*',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (server-to-server, Postman, curl)
+    if (!origin) return callback(null, true);
+    const allowed = [
+      'https://borealismark.com', 'https://www.borealismark.com',
+      'https://borealisterminal.com', 'https://www.borealisterminal.com',
+      'https://borealisprotocol.ai', 'https://www.borealisprotocol.ai',
+    ];
+    // Allow all Cloudflare Pages preview URLs
+    if (allowed.includes(origin)
+        || origin.endsWith('.pages.dev')
+        || origin.includes('localhost')) {
+      return callback(null, true);
+    }
+    callback(null, false);
+  },
   exposedHeaders: ['X-Request-Id', 'RateLimit-Limit', 'RateLimit-Remaining', 'RateLimit-Reset'],
 }));
 
