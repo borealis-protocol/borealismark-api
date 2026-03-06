@@ -273,7 +273,8 @@ router.get('/listings', async (req: Request, res: Response) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
 
-    let query = `SELECT l.*, u.name as seller_name, u.email as seller_email
+    let query = `SELECT l.*, u.name as seller_name, u.email as seller_email, u.tier as seller_tier, u.created_at as seller_created_at,
+                 (SELECT COUNT(*) FROM listing_likes WHERE listing_id = l.id) as like_count
                  FROM marketplace_listings l
                  JOIN users u ON l.user_id = u.id
                  WHERE l.status = 'published'`;
@@ -310,6 +311,7 @@ router.get('/listings', async (req: Request, res: Response) => {
       data: {
         listings: listings.map(l => ({
           id: l.id,
+          userId: l.user_id,
           title: l.title,
           description: l.description,
           listingType: l.listing_type,
@@ -318,6 +320,11 @@ router.get('/listings', async (req: Request, res: Response) => {
           tradeFor: l.trade_for,
           tags: JSON.parse(l.tags || '[]'),
           sellerName: l.seller_name,
+          sellerId: l.user_id,
+          sellerTier: l.seller_tier || 'standard',
+          sellerVerified: l.seller_tier === 'pro' || l.seller_tier === 'elite',
+          sellerAge: Math.floor((Date.now() - (l.seller_created_at || Date.now())) / (1000 * 60 * 60 * 24)),
+          likeCount: l.like_count || 0,
           viewCount: l.view_count,
           hasAgent: !!l.assigned_agent_id,
           createdAt: l.created_at,
@@ -1484,6 +1491,252 @@ router.get('/tier-info', async (_req: Request, res: Response) => {
   }));
 
   res.json({ success: true, data: { tiers: info } });
+});
+
+// ─── Social Engagement: Likes ────────────────────────────────────────────────
+
+/** Helper: get like stats for a listing */
+function getLikeStats(listingId: string, userId?: string) {
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT user_tier, COUNT(*) as cnt FROM listing_likes WHERE listing_id = ? GROUP BY user_tier`
+  ).all(listingId) as Array<{ user_tier: string; cnt: number }>;
+
+  const breakdown: Record<string, number> = { standard: 0, pro: 0, elite: 0 };
+  let total = 0;
+  for (const r of rows) {
+    breakdown[r.user_tier] = (breakdown[r.user_tier] || 0) + r.cnt;
+    total += r.cnt;
+  }
+
+  let userHasLiked = false;
+  if (userId) {
+    const row = db.prepare(`SELECT 1 FROM listing_likes WHERE listing_id = ? AND user_id = ?`).get(listingId, userId);
+    userHasLiked = !!row;
+  }
+
+  return { total, breakdown, userHasLiked };
+}
+
+/**
+ * POST /v1/marketplace/listings/:id/like — Like a listing
+ */
+router.post('/listings/:id/like', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    const listingId = req.params.id;
+    const db = getDb();
+
+    // Verify listing exists and is published
+    const listing = db.prepare(`SELECT id FROM marketplace_listings WHERE id = ? AND status = 'published'`).get(listingId);
+    if (!listing) return res.status(404).json({ success: false, error: 'Listing not found' });
+
+    // Get user tier
+    const user = db.prepare(`SELECT tier FROM users WHERE id = ?`).get(userId) as any;
+    const tier = user?.tier || 'standard';
+
+    // Insert like (ignore if duplicate)
+    try {
+      db.prepare(`INSERT INTO listing_likes (id, listing_id, user_id, user_tier, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+        uuid(), listingId, userId, tier, Date.now()
+      );
+    } catch (e: any) {
+      if (e.message?.includes('UNIQUE constraint')) {
+        const stats = getLikeStats(listingId, userId);
+        return res.status(409).json({ success: false, error: 'Already liked', stats });
+      }
+      throw e;
+    }
+
+    const stats = getLikeStats(listingId, userId);
+    res.status(201).json({ success: true, message: 'Listing liked', stats });
+  } catch (err: any) {
+    logger.error('Like error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to like listing' });
+  }
+});
+
+/**
+ * DELETE /v1/marketplace/listings/:id/like — Unlike a listing
+ */
+router.delete('/listings/:id/like', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    const listingId = req.params.id;
+    getDb().prepare(`DELETE FROM listing_likes WHERE listing_id = ? AND user_id = ?`).run(listingId, userId);
+
+    const stats = getLikeStats(listingId, userId);
+    res.json({ success: true, message: 'Like removed', stats });
+  } catch (err: any) {
+    logger.error('Unlike error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to unlike listing' });
+  }
+});
+
+/**
+ * GET /v1/marketplace/listings/:id/likes — Get like stats (public, optional auth)
+ */
+router.get('/listings/:id/likes', async (req: Request, res: Response) => {
+  try {
+    // Optional auth — extract user if present
+    let userId: string | undefined;
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith('Bearer ')) {
+      try {
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(authHeader.slice(7), process.env.JWT_SECRET || 'borealis-jwt-secret-2026') as any;
+        userId = decoded.sub;
+      } catch (_) { /* not authenticated, that's fine */ }
+    }
+
+    const stats = getLikeStats(req.params.id, userId);
+    res.json({ success: true, stats });
+  } catch (err: any) {
+    logger.error('Get likes error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch likes' });
+  }
+});
+
+/**
+ * GET /v1/marketplace/my-likes — Get listing IDs the current user has liked
+ */
+router.get('/my-likes', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    const rows = getDb().prepare(`SELECT listing_id FROM listing_likes WHERE user_id = ?`).all(userId) as Array<{ listing_id: string }>;
+    res.json({ success: true, likeIds: rows.map(r => r.listing_id) });
+  } catch (err: any) {
+    logger.error('My likes error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch likes' });
+  }
+});
+
+// ─── Social Engagement: Watchlist ────────────────────────────────────────────
+
+/**
+ * POST /v1/marketplace/listings/:id/watch — Add to watchlist
+ */
+router.post('/listings/:id/watch', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    const listingId = req.params.id;
+    const db = getDb();
+
+    const listing = db.prepare(`SELECT id FROM marketplace_listings WHERE id = ? AND status = 'published'`).get(listingId);
+    if (!listing) return res.status(404).json({ success: false, error: 'Listing not found' });
+
+    try {
+      db.prepare(`INSERT INTO user_watchlist (id, user_id, listing_id, added_at) VALUES (?, ?, ?, ?)`).run(
+        uuid(), userId, listingId, Date.now()
+      );
+    } catch (e: any) {
+      if (e.message?.includes('UNIQUE constraint')) {
+        return res.status(409).json({ success: false, error: 'Already in watchlist' });
+      }
+      throw e;
+    }
+
+    res.status(201).json({ success: true, message: 'Added to watchlist' });
+  } catch (err: any) {
+    logger.error('Watchlist add error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to add to watchlist' });
+  }
+});
+
+/**
+ * DELETE /v1/marketplace/listings/:id/watch — Remove from watchlist
+ */
+router.delete('/listings/:id/watch', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    getDb().prepare(`DELETE FROM user_watchlist WHERE user_id = ? AND listing_id = ?`).run(userId, req.params.id);
+    res.json({ success: true, message: 'Removed from watchlist' });
+  } catch (err: any) {
+    logger.error('Watchlist remove error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to remove from watchlist' });
+  }
+});
+
+/**
+ * GET /v1/marketplace/watchlist — Get user's watchlist with full listing data
+ */
+router.get('/watchlist', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    const rows = getDb().prepare(`
+      SELECT w.id as watchlist_id, w.added_at, l.*, u.name as seller_name, u.tier as seller_tier
+      FROM user_watchlist w
+      JOIN marketplace_listings l ON w.listing_id = l.id
+      JOIN users u ON l.user_id = u.id
+      WHERE w.user_id = ? AND l.status = 'published'
+      ORDER BY w.added_at DESC
+    `).all(userId) as any[];
+
+    res.json({
+      success: true,
+      data: {
+        watchlist: rows.map(r => ({
+          watchlistId: r.watchlist_id,
+          addedAt: r.added_at,
+          listingId: r.id,
+          listing: {
+            id: r.id,
+            title: r.title,
+            description: r.description,
+            listingType: r.listing_type,
+            category: r.category,
+            priceUsdc: r.price_usdc,
+            tradeFor: r.trade_for,
+            tags: JSON.parse(r.tags || '[]'),
+            sellerName: r.seller_name,
+            sellerTier: r.seller_tier,
+            sellerVerified: r.seller_tier === 'pro' || r.seller_tier === 'elite',
+            viewCount: r.view_count,
+            createdAt: r.created_at,
+          },
+        })),
+        count: rows.length,
+      },
+    });
+  } catch (err: any) {
+    logger.error('Watchlist fetch error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch watchlist' });
+  }
+});
+
+/**
+ * GET /v1/marketplace/my-watchlist-ids — Get listing IDs on user's watchlist
+ */
+router.get('/my-watchlist-ids', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    const rows = getDb().prepare(`SELECT listing_id FROM user_watchlist WHERE user_id = ?`).all(userId) as Array<{ listing_id: string }>;
+    res.json({ success: true, watchIds: rows.map(r => r.listing_id) });
+  } catch (err: any) {
+    logger.error('Watchlist IDs error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch watchlist IDs' });
+  }
 });
 
 export default router;

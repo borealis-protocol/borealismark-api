@@ -375,6 +375,33 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_prt_token ON password_reset_tokens(token_hash);
     CREATE INDEX IF NOT EXISTS idx_prt_user ON password_reset_tokens(user_id);
     CREATE INDEX IF NOT EXISTS idx_prt_expires ON password_reset_tokens(expires_at);
+
+    /* ─── Social Engagement: Likes ─── */
+    CREATE TABLE IF NOT EXISTS listing_likes (
+      id TEXT PRIMARY KEY,
+      listing_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      user_tier TEXT NOT NULL DEFAULT 'standard',
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (listing_id) REFERENCES marketplace_listings(id),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      UNIQUE(listing_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_likes_listing ON listing_likes(listing_id);
+    CREATE INDEX IF NOT EXISTS idx_likes_user ON listing_likes(user_id);
+
+    /* ─── Social Engagement: Watchlist ─── */
+    CREATE TABLE IF NOT EXISTS user_watchlist (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      listing_id TEXT NOT NULL,
+      added_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (listing_id) REFERENCES marketplace_listings(id),
+      UNIQUE(user_id, listing_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_watchlist_user ON user_watchlist(user_id);
+    CREATE INDEX IF NOT EXISTS idx_watchlist_listing ON user_watchlist(listing_id);
   `);
 
   // Migrate: add new columns to api_keys if upgrading from old schema
