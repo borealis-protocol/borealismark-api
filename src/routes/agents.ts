@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { requireApiKey, requireScope } from '../middleware/auth';
+import { requireAuth } from './auth';
+import type { AuthRequest } from './auth';
 import { validateBody } from '../middleware/validate';
 import { auditLimiter } from '../middleware/rateLimiter';
 import { logger, auditLog } from '../middleware/logger';
@@ -12,6 +14,14 @@ import {
   getLatestCertificate,
   getCertificateById,
   updateCertificateHCS,
+  getAgentsByUserId,
+  getAgentByIdAndOwner,
+  updateAgent,
+  softDeleteAgent,
+  getCertificatesByAgentId,
+  getCertificatesByUserId,
+  toggleAgentPublicListing,
+  getPublicAgents,
 } from '../db/database';
 import { runAudit } from '../engine/audit-engine';
 import { createHederaClient, submitCertificateToHCS, createAuditTopic } from '../hedera/hcs';
@@ -348,6 +358,320 @@ router.get('/:id/certificate', requireApiKey, requireScope('read'), (req, res) =
     },
     timestamp: Date.now(),
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// JWT-AUTHENTICATED DASHBOARD ENDPOINTS (user-owned agents)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DashboardRegisterSchema = z.object({
+  name: z.string().min(2).max(100),
+  description: z.string().max(500).optional().default(''),
+  version: z.string().default('1.0.0'),
+  agent_type: z.enum(['llm', 'image', 'audio', 'code', 'other']).default('other'),
+});
+
+const DashboardUpdateSchema = z.object({
+  name: z.string().min(2).max(100).optional(),
+  description: z.string().max(500).optional(),
+  version: z.string().optional(),
+  agent_type: z.enum(['llm', 'image', 'audio', 'code', 'other']).optional(),
+});
+
+// ─── GET /v1/agents/my ────────────────────────────────────────────────────────
+router.get('/my', requireAuth, (req, res) => {
+  const user = (req as AuthRequest).user!;
+  try {
+    const agents = getAgentsByUserId(user.sub);
+    // Enrich with latest certificate data
+    const enriched = agents.map((agent: any) => {
+      const cert = getLatestCertificate(agent.id);
+      return {
+        id: agent.id,
+        name: agent.name,
+        description: agent.description,
+        version: agent.version,
+        agent_type: agent.agent_type || 'other',
+        registered_at: agent.registered_at,
+        active: agent.active,
+        public_listing: agent.public_listing || 0,
+        score: cert ? (cert.score_total as number) : null,
+        credit_rating: cert ? (cert.credit_rating as string) : null,
+        score_json: cert ? JSON.parse(cert.score_json as string) : null,
+        certificate_id: cert ? (cert.certificate_id as string) : null,
+        last_audit_at: cert ? (cert.issued_at as number) : null,
+        hcs_anchored: cert ? !!(cert.hcs_transaction_id) : false,
+      };
+    });
+    res.json({ success: true, data: enriched, timestamp: Date.now() });
+  } catch (err) {
+    logger.error('List user agents error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Failed to list agents', timestamp: Date.now() });
+  }
+});
+
+// ─── POST /v1/agents/my/register ──────────────────────────────────────────────
+router.post('/my/register', requireAuth, (req, res) => {
+  const user = (req as AuthRequest).user!;
+  try {
+    const parsed = DashboardRegisterSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: 'Validation failed', details: parsed.error.flatten().fieldErrors, timestamp: Date.now() });
+      return;
+    }
+    const { name, description, version, agent_type } = parsed.data;
+    const id = `agent_${uuidv4().replace(/-/g, '').slice(0, 20)}`;
+
+    registerAgent(id, name, description ?? '', version, 'dashboard', user.sub, agent_type);
+
+    emit.agentRegistered({ agentId: id, name, version });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id, name, description, version, agent_type,
+        registered_at: Date.now(), active: 1, public_listing: 0,
+        score: null, credit_rating: null, certificate_id: null, last_audit_at: null,
+      },
+      timestamp: Date.now(),
+    });
+  } catch (err) {
+    logger.error('Dashboard register agent error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Failed to register agent', timestamp: Date.now() });
+  }
+});
+
+// ─── PATCH /v1/agents/my/:id ──────────────────────────────────────────────────
+router.patch('/my/:id', requireAuth, (req, res) => {
+  const user = (req as AuthRequest).user!;
+  try {
+    const parsed = DashboardUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: 'Validation failed', details: parsed.error.flatten().fieldErrors, timestamp: Date.now() });
+      return;
+    }
+    const updated = updateAgent(req.params.id, user.sub, parsed.data);
+    if (!updated) {
+      res.status(404).json({ success: false, error: 'Agent not found or not owned by you', timestamp: Date.now() });
+      return;
+    }
+    const agent = getAgentByIdAndOwner(req.params.id, user.sub);
+    res.json({ success: true, data: agent, timestamp: Date.now() });
+  } catch (err) {
+    logger.error('Dashboard update agent error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Failed to update agent', timestamp: Date.now() });
+  }
+});
+
+// ─── DELETE /v1/agents/my/:id ─────────────────────────────────────────────────
+router.delete('/my/:id', requireAuth, (req, res) => {
+  const user = (req as AuthRequest).user!;
+  try {
+    const deleted = softDeleteAgent(req.params.id, user.sub);
+    if (!deleted) {
+      res.status(404).json({ success: false, error: 'Agent not found or not owned by you', timestamp: Date.now() });
+      return;
+    }
+    res.json({ success: true, data: { message: 'Agent deleted' }, timestamp: Date.now() });
+  } catch (err) {
+    logger.error('Dashboard delete agent error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Failed to delete agent', timestamp: Date.now() });
+  }
+});
+
+// ─── GET /v1/agents/my/:id/certificates ───────────────────────────────────────
+router.get('/my/:id/certificates', requireAuth, (req, res) => {
+  const user = (req as AuthRequest).user!;
+  try {
+    const agent = getAgentByIdAndOwner(req.params.id, user.sub);
+    if (!agent) {
+      res.status(404).json({ success: false, error: 'Agent not found', timestamp: Date.now() });
+      return;
+    }
+    const certs = getCertificatesByAgentId(req.params.id);
+    const enriched = certs.map((c: any) => ({
+      certificate_id: c.certificate_id,
+      agent_id: c.agent_id,
+      agent_version: c.agent_version,
+      issued_at: c.issued_at,
+      score_total: c.score_total,
+      score_json: JSON.parse(c.score_json),
+      credit_rating: c.credit_rating,
+      certificate_hash: c.certificate_hash,
+      hcs_topic_id: c.hcs_topic_id,
+      hcs_transaction_id: c.hcs_transaction_id,
+      hcs_sequence_number: c.hcs_sequence_number,
+      revoked: !!c.revoked,
+    }));
+    res.json({ success: true, data: enriched, timestamp: Date.now() });
+  } catch (err) {
+    logger.error('Get agent certificates error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Failed to get certificates', timestamp: Date.now() });
+  }
+});
+
+// ─── GET /v1/agents/my/certificates/all ───────────────────────────────────────
+router.get('/my/certificates/all', requireAuth, (req, res) => {
+  const user = (req as AuthRequest).user!;
+  try {
+    const certs = getCertificatesByUserId(user.sub);
+    const enriched = certs.map((c: any) => ({
+      certificate_id: c.certificate_id,
+      agent_id: c.agent_id,
+      agent_version: c.agent_version,
+      issued_at: c.issued_at,
+      score_total: c.score_total,
+      score_json: JSON.parse(c.score_json),
+      credit_rating: c.credit_rating,
+      certificate_hash: c.certificate_hash,
+      hcs_topic_id: c.hcs_topic_id,
+      hcs_transaction_id: c.hcs_transaction_id,
+      revoked: !!c.revoked,
+    }));
+    res.json({ success: true, data: enriched, timestamp: Date.now() });
+  } catch (err) {
+    logger.error('Get all user certificates error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Failed to get certificates', timestamp: Date.now() });
+  }
+});
+
+// ─── POST /v1/agents/my/:id/audit ─────────────────────────────────────────────
+// Simplified audit for dashboard users (Quick or Advanced)
+router.post('/my/:id/audit', requireAuth, auditLimiter, async (req, res) => {
+  const user = (req as AuthRequest).user!;
+  const agent = getAgentByIdAndOwner(req.params.id, user.sub);
+  if (!agent) {
+    res.status(404).json({ success: false, error: 'Agent not found', timestamp: Date.now() });
+    return;
+  }
+
+  try {
+    const isQuick = req.body.mode === 'quick';
+    const now = Date.now();
+    const dayMs = 86400000;
+
+    let auditInput: AuditInput;
+
+    if (isQuick) {
+      // Quick Audit: auto-generate baseline data
+      auditInput = {
+        agentId: req.params.id,
+        agentVersion: (agent.version as string) || '1.0.0',
+        auditPeriodStart: now - 30 * dayMs,
+        auditPeriodEnd: now,
+        constraints: [
+          { constraintId: 'c1', constraintName: 'Input Boundary Check', severity: 'MEDIUM' as any, passed: true },
+          { constraintId: 'c2', constraintName: 'Output Policy Compliance', severity: 'HIGH' as any, passed: true },
+          { constraintId: 'c3', constraintName: 'Data Handling Protocol', severity: 'CRITICAL' as any, passed: true },
+        ],
+        decisions: [
+          { decisionId: 'd1', timestamp: now - dayMs, inputHash: 'auto', outputHash: 'auto', hasReasoningChain: true, reasoningDepth: 3, confidence: 0.85, wasOverridden: false },
+        ],
+        behaviorSamples: [
+          { inputClass: 'general', sampleCount: 100, outputVariance: 0.15, deterministicRate: 0.85 },
+        ],
+        totalActions: 100,
+        anomalyCount: 2,
+        expectedLogEntries: 100,
+        actualLogEntries: 98,
+      };
+    } else {
+      // Advanced Audit: user provides data
+      const parsed = AuditSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Invalid audit data', details: parsed.error.flatten().fieldErrors, timestamp: Date.now() });
+        return;
+      }
+      auditInput = { agentId: req.params.id, ...parsed.data };
+    }
+
+    // Run the audit engine
+    const certificate = runAudit(auditInput);
+
+    // Persist
+    saveCertificate({
+      certificateId: certificate.certificateId,
+      agentId: certificate.agentId,
+      agentVersion: certificate.agentVersion,
+      auditId: certificate.auditId,
+      issuedAt: certificate.issuedAt,
+      auditPeriodStart: certificate.auditPeriodStart,
+      auditPeriodEnd: certificate.auditPeriodEnd,
+      scoreTotal: certificate.score.total,
+      scoreJson: JSON.stringify(certificate.score),
+      creditRating: certificate.creditRating,
+      inputHash: certificate.inputHash,
+      certificateHash: certificate.certificateHash,
+    });
+
+    // Try HCS anchoring
+    const accountId = process.env.HEDERA_ACCOUNT_ID;
+    const privateKey = process.env.HEDERA_PRIVATE_KEY;
+    let topicId = process.env.HEDERA_AUDIT_TOPIC_ID;
+
+    if (accountId && privateKey) {
+      try {
+        const hederaClient = createHederaClient({ accountId, privateKey, network: (process.env.HEDERA_NETWORK as 'testnet' | 'mainnet') ?? 'testnet' });
+        if (!topicId) topicId = await createAuditTopic(hederaClient);
+        const hcsResult = await submitCertificateToHCS(hederaClient, topicId, certificate);
+        updateCertificateHCS(certificate.auditId, hcsResult.topicId, hcsResult.transactionId, hcsResult.sequenceNumber, hcsResult.consensusTimestamp);
+        certificate.hcsTopicId = hcsResult.topicId;
+        certificate.hcsTransactionId = hcsResult.transactionId;
+        certificate.hcsSequenceNumber = hcsResult.sequenceNumber;
+        certificate.hcsConsensusTimestamp = hcsResult.consensusTimestamp;
+      } catch (hcsErr) {
+        logger.warn('Dashboard audit HCS submission failed', { error: String(hcsErr) });
+      }
+    }
+
+    emit.auditCompleted({
+      certificateId: certificate.certificateId,
+      agentId: req.params.id,
+      score: certificate.score.total,
+      creditRating: certificate.creditRating,
+      hcsAnchored: !!certificate.hcsTransactionId,
+    });
+
+    res.json({ success: true, data: certificate, timestamp: Date.now() });
+  } catch (err) {
+    logger.error('Dashboard audit error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Audit failed', timestamp: Date.now() });
+  }
+});
+
+// ─── PATCH /v1/agents/my/:id/listing ──────────────────────────────────────────
+router.patch('/my/:id/listing', requireAuth, (req, res) => {
+  const user = (req as AuthRequest).user!;
+  try {
+    const { public_listing } = req.body;
+    if (typeof public_listing !== 'boolean') {
+      res.status(400).json({ success: false, error: 'public_listing must be a boolean', timestamp: Date.now() });
+      return;
+    }
+    const updated = toggleAgentPublicListing(req.params.id, user.sub, public_listing);
+    if (!updated) {
+      res.status(404).json({ success: false, error: 'Agent not found', timestamp: Date.now() });
+      return;
+    }
+    res.json({ success: true, data: { public_listing }, timestamp: Date.now() });
+  } catch (err) {
+    logger.error('Toggle listing error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Failed to update listing', timestamp: Date.now() });
+  }
+});
+
+// ─── GET /v1/agents/public ────────────────────────────────────────────────────
+// Public endpoint for Borealis Terminal marketplace
+router.get('/public', (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const agents = getPublicAgents(limit, offset);
+    res.json({ success: true, data: agents, timestamp: Date.now() });
+  } catch (err) {
+    logger.error('Get public agents error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Failed to get public agents', timestamp: Date.now() });
+  }
 });
 
 export default router;

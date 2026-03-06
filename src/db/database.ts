@@ -433,6 +433,16 @@ function initSchema(db: Database.Database): void {
   if (!invCols.includes('discount_percent'))  db.exec("ALTER TABLE usdc_invoices ADD COLUMN discount_percent INTEGER DEFAULT 0");
   if (!invCols.includes('original_amount_usd')) db.exec("ALTER TABLE usdc_invoices ADD COLUMN original_amount_usd REAL");
 
+  // Migrate: add agent dashboard columns (owner_user_id, agent_type, public_listing)
+  const agentCols = (db.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!agentCols.includes('owner_user_id'))   db.exec("ALTER TABLE agents ADD COLUMN owner_user_id TEXT");
+  if (!agentCols.includes('agent_type'))      db.exec("ALTER TABLE agents ADD COLUMN agent_type TEXT DEFAULT 'other'");
+  if (!agentCols.includes('public_listing'))  db.exec("ALTER TABLE agents ADD COLUMN public_listing INTEGER DEFAULT 0");
+
+  // Index for dashboard agent lookups by user
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_agents_owner ON agents(owner_user_id)"); } catch {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_agents_public ON agents(public_listing) WHERE active = 1 AND public_listing = 1"); } catch {}
+
   // Migrate: add new columns to api_keys if upgrading from old schema
   const keyColumns = (db.prepare("PRAGMA table_info(api_keys)").all() as Array<{ name: string }>).map(r => r.name);
   if (!keyColumns.includes('scopes'))        db.exec("ALTER TABLE api_keys ADD COLUMN scopes TEXT NOT NULL DEFAULT 'audit,read'");
@@ -950,16 +960,96 @@ export function registerAgent(
   description: string,
   version: string,
   registrantKeyId: string,
+  ownerUserId?: string,
+  agentType?: string,
 ): void {
   getDb()
     .prepare(
-      'INSERT INTO agents (id, name, description, version, registered_at, registrant_key_id) VALUES (?, ?, ?, ?, ?, ?)',
+      `INSERT INTO agents (id, name, description, version, registered_at, registrant_key_id, owner_user_id, agent_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(id, name, description, version, Date.now(), registrantKeyId);
+    .run(id, name, description, version, Date.now(), registrantKeyId, ownerUserId ?? null, agentType ?? 'other');
 }
 
 export function getAgent(id: string): Record<string, unknown> | undefined {
   return getDb().prepare('SELECT * FROM agents WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+}
+
+// ─── Dashboard Agent Queries (JWT-authenticated) ──────────────────────────────
+
+export function getAgentsByUserId(userId: string): Record<string, unknown>[] {
+  return getDb()
+    .prepare('SELECT * FROM agents WHERE owner_user_id = ? ORDER BY registered_at DESC')
+    .all(userId) as Record<string, unknown>[];
+}
+
+export function getAgentByIdAndOwner(agentId: string, userId: string): Record<string, unknown> | undefined {
+  return getDb()
+    .prepare('SELECT * FROM agents WHERE id = ? AND owner_user_id = ?')
+    .get(agentId, userId) as Record<string, unknown> | undefined;
+}
+
+export function updateAgent(agentId: string, userId: string, updates: { name?: string; description?: string; version?: string; agent_type?: string }): boolean {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  if (updates.name !== undefined) { fields.push('name = ?'); values.push(updates.name); }
+  if (updates.description !== undefined) { fields.push('description = ?'); values.push(updates.description); }
+  if (updates.version !== undefined) { fields.push('version = ?'); values.push(updates.version); }
+  if (updates.agent_type !== undefined) { fields.push('agent_type = ?'); values.push(updates.agent_type); }
+  if (fields.length === 0) return false;
+  values.push(agentId, userId);
+  const result = getDb()
+    .prepare(`UPDATE agents SET ${fields.join(', ')} WHERE id = ? AND owner_user_id = ?`)
+    .run(...values);
+  return result.changes > 0;
+}
+
+export function softDeleteAgent(agentId: string, userId: string): boolean {
+  const result = getDb()
+    .prepare('UPDATE agents SET active = 0 WHERE id = ? AND owner_user_id = ?')
+    .run(agentId, userId);
+  return result.changes > 0;
+}
+
+export function getCertificatesByAgentId(agentId: string): Record<string, unknown>[] {
+  return getDb()
+    .prepare('SELECT * FROM audit_certificates WHERE agent_id = ? ORDER BY issued_at DESC')
+    .all(agentId) as Record<string, unknown>[];
+}
+
+export function getCertificatesByUserId(userId: string): Record<string, unknown>[] {
+  return getDb()
+    .prepare(
+      `SELECT ac.* FROM audit_certificates ac
+       JOIN agents a ON ac.agent_id = a.id
+       WHERE a.owner_user_id = ?
+       ORDER BY ac.issued_at DESC`,
+    )
+    .all(userId) as Record<string, unknown>[];
+}
+
+export function toggleAgentPublicListing(agentId: string, userId: string, publicListing: boolean): boolean {
+  const result = getDb()
+    .prepare('UPDATE agents SET public_listing = ? WHERE id = ? AND owner_user_id = ?')
+    .run(publicListing ? 1 : 0, agentId, userId);
+  return result.changes > 0;
+}
+
+export function getPublicAgents(limit: number = 50, offset: number = 0): Record<string, unknown>[] {
+  return getDb()
+    .prepare(
+      `SELECT a.*, ac.score_total, ac.credit_rating, ac.certificate_id, ac.issued_at as last_audit_at
+       FROM agents a
+       LEFT JOIN (
+         SELECT agent_id, score_total, credit_rating, certificate_id, issued_at,
+                ROW_NUMBER() OVER (PARTITION BY agent_id ORDER BY issued_at DESC) as rn
+         FROM audit_certificates WHERE revoked = 0
+       ) ac ON a.id = ac.agent_id AND ac.rn = 1
+       WHERE a.active = 1 AND a.public_listing = 1
+       ORDER BY ac.score_total DESC NULLS LAST
+       LIMIT ? OFFSET ?`,
+    )
+    .all(limit, offset) as Record<string, unknown>[];
 }
 
 // ─── Certificate Queries ──────────────────────────────────────────────────────
