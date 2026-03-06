@@ -16,6 +16,7 @@ import paymentsRouter from './routes/payments';
 import terminalRouter from './routes/terminal';
 import marketplaceRouter from './routes/marketplace';
 import { cleanupExpiredInvoices } from './hedera/usdc';
+import { getExpiredUsdcSubscriptions, updateUserTier } from './db/database';
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
@@ -145,6 +146,27 @@ setInterval(() => {
     logger.info('Cleaned up expired USDC invoices', { count: cleaned });
   }
 }, 5 * 60 * 1000);
+
+// Check for expired USDC subscriptions every hour and downgrade
+setInterval(() => {
+  try {
+    const expired = getExpiredUsdcSubscriptions();
+    for (const user of expired) {
+      updateUserTier(user.id, 'standard');
+      logger.info('USDC subscription expired → downgraded to standard', {
+        userId: user.id,
+        email: user.email,
+        previousTier: user.tier,
+        expiredAt: user.subscriptionExpiresAt ? new Date(user.subscriptionExpiresAt).toISOString() : 'unknown',
+      });
+    }
+    if (expired.length > 0) {
+      logger.info('Expired USDC subscriptions processed', { count: expired.length });
+    }
+  } catch (err: any) {
+    logger.error('Failed to process expired subscriptions', { error: err.message });
+  }
+}, 60 * 60 * 1000); // hourly
 
 app.listen(PORT, () => {
   logger.info('BorealisMark Protocol API started', {

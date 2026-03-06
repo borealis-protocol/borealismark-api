@@ -1,7 +1,7 @@
 /**
  * BorealisMark Unified Payment Routes
  * Dual payment system: Stripe (card) + Hedera USDC (crypto)
- * Consumers choose their preferred payment method at checkout.
+ * Includes: subscription expiry tracking, USDC discount pricing, coupon system
  */
 
 import { Router, Request, Response } from 'express';
@@ -12,7 +12,11 @@ import {
   createBillingPortalSession,
   constructWebhookEvent,
 } from '../stripe/client';
-import { ALL_PLANS, AGENT_PLANS, API_TIERS, getPlanByPriceId } from '../stripe/config';
+import {
+  ALL_PLANS, AGENT_PLANS, API_TIERS,
+  getPlanByPriceId, USDC_PRICES,
+  getUsdcPriceWithDiscount, USDC_DISCOUNT_PERCENT,
+} from '../stripe/config';
 import {
   createUsdcInvoice,
   getInvoice,
@@ -27,39 +31,89 @@ import {
 import { logger } from '../middleware/logger';
 import {
   getUserByEmail,
+  getUserById,
   updateUserTier,
   updateUserStripe,
   getUserByStripeCustomerId,
+  setSubscriptionExpiry,
+  validateCoupon,
+  getCouponByCode,
+  incrementCouponUsage,
+  createCoupon,
+  listCoupons,
+  deactivateCoupon,
+  saveUsdcInvoiceWithDiscount,
 } from '../db/database';
+import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** Calculate subscription expiry from now based on plan interval */
+function calculateExpiryFromNow(planId: string): number {
+  const plan = ALL_PLANS[planId];
+  if (!plan) return Date.now() + 365 * 24 * 60 * 60 * 1000; // default: 1 year
+  if (plan.interval === 'year') return Date.now() + 365 * 24 * 60 * 60 * 1000;
+  return Date.now() + 30 * 24 * 60 * 60 * 1000; // monthly
+}
+
+/** Extend expiry from the current expiry date (for renewals) or from now */
+function calculateRenewalExpiry(currentExpiresAt: number | null, planId: string): number {
+  const plan = ALL_PLANS[planId];
+  const duration = plan?.interval === 'year'
+    ? 365 * 24 * 60 * 60 * 1000
+    : 30 * 24 * 60 * 60 * 1000;
+
+  // If current subscription hasn't expired yet, extend from expiry date
+  if (currentExpiresAt && currentExpiresAt > Date.now()) {
+    return currentExpiresAt + duration;
+  }
+  // Otherwise start from now
+  return Date.now() + duration;
+}
+
+const planToTier: Record<string, 'standard' | 'pro' | 'elite'> = {
+  pro: 'pro',
+  elite: 'elite',
+  starter: 'pro',
+  business: 'pro',
+  enterprise: 'elite',
+};
 
 // ─── GET /v1/payments/plans ──────────────────────────────────────────────────
 // Public: List all available plans with pricing + accepted payment methods
 
 router.get('/plans', (_req: Request, res: Response) => {
-  const formatPlan = ([key, plan]: [string, any]) => ({
-    id: key,
-    name: plan.name,
-    amount: plan.amount / 100,
-    currency: plan.currency,
-    interval: plan.interval,
-    features: plan.features,
-    paymentMethods: {
-      stripe: {
-        priceId: plan.priceId,
-        type: 'card',
-        processingFee: '~3.4%',
+  const formatPlan = ([key, plan]: [string, any]) => {
+    const usdcPrice = USDC_PRICES[key];
+    return {
+      id: key,
+      name: plan.name,
+      amount: plan.amount / 100,
+      currency: plan.currency,
+      interval: plan.interval,
+      features: plan.features,
+      paymentMethods: {
+        stripe: {
+          priceId: plan.priceId,
+          type: 'card',
+          processingFee: '~3.4%',
+          amount: plan.amount / 100,
+        },
+        usdc: {
+          tokenId: USDC_TOKEN_ID,
+          treasuryAccount: TREASURY_ACCOUNT_ID,
+          network: process.env.HEDERA_NETWORK ?? 'testnet',
+          type: 'crypto',
+          processingFee: '~$0.001',
+          amount: usdcPrice?.amountUsd ?? plan.amount / 100,
+          discountPercent: usdcPrice?.discountPercent ?? 0,
+          savingsNote: usdcPrice ? `Save ${usdcPrice.discountPercent}% with USDC` : undefined,
+        },
       },
-      usdc: {
-        tokenId: USDC_TOKEN_ID,
-        treasuryAccount: TREASURY_ACCOUNT_ID,
-        network: process.env.HEDERA_NETWORK ?? 'testnet',
-        type: 'crypto',
-        processingFee: '~$0.001',
-      },
-    },
-  });
+    };
+  };
 
   res.json({
     success: true,
@@ -67,7 +121,8 @@ router.get('/plans', (_req: Request, res: Response) => {
       agentPlans: Object.entries(AGENT_PLANS).map(formatPlan),
       apiTiers: Object.entries(API_TIERS).map(formatPlan),
       acceptedMethods: ['stripe', 'usdc'],
-      note: 'Choose "stripe" for card payments or "usdc" for USDC stablecoin on Hedera',
+      usdcDiscountPercent: USDC_DISCOUNT_PERCENT,
+      note: 'Choose "stripe" for card payments or "usdc" for USDC stablecoin on Hedera. USDC saves ~3% (no processing fees).',
     },
     timestamp: Date.now(),
   });
@@ -81,6 +136,8 @@ const checkoutSchema = z.object({
   method: z.enum(['stripe', 'usdc']),
   email: z.string().email(),
   agentId: z.string().optional(),
+  couponCode: z.string().optional(),
+  isRenewal: z.boolean().optional().default(false),
   // Stripe-specific
   successUrl: z.string().url().optional(),
   cancelUrl: z.string().url().optional(),
@@ -90,16 +147,33 @@ router.post('/checkout', async (req: Request, res: Response) => {
   try {
     const body = checkoutSchema.parse(req.body);
     const plan = ALL_PLANS[body.planId];
-    const amountUsd = plan.amount / 100;
+
+    // ── Validate coupon if provided ──
+    let couponDiscount = 0;
+    let couponRecord: any = null;
+    if (body.couponCode) {
+      const validation = validateCoupon(body.couponCode, body.planId, body.isRenewal);
+      if (!validation.valid) {
+        return res.status(400).json({
+          success: false,
+          error: validation.reason ?? 'Invalid coupon',
+          timestamp: Date.now(),
+        });
+      }
+      couponRecord = validation.coupon;
+      couponDiscount = couponRecord!.discountPercent;
+    }
 
     // ── Stripe Card Checkout ──
     if (body.method === 'stripe') {
+      // For Stripe, coupons would need to be created as Stripe Coupon objects
+      // For now, we apply coupons only to USDC payments
       const session = await createCheckoutSession({
         priceId: plan.priceId,
         customerEmail: body.email,
         agentId: body.agentId,
-        successUrl: body.successUrl ?? `${process.env.FRONTEND_URL ?? 'https://borealismark.com'}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancelUrl: body.cancelUrl ?? `${process.env.FRONTEND_URL ?? 'https://borealismark.com'}/payment/cancelled`,
+        successUrl: body.successUrl ?? `${process.env.FRONTEND_URL ?? 'https://borealismark.com'}/dashboard.html?payment=success`,
+        cancelUrl: body.cancelUrl ?? `${process.env.FRONTEND_URL ?? 'https://borealismark.com'}/dashboard.html?payment=cancelled`,
       });
 
       logger.info('Stripe checkout created', {
@@ -122,7 +196,27 @@ router.post('/checkout', async (req: Request, res: Response) => {
 
     // ── USDC Hedera Checkout ──
     if (body.method === 'usdc') {
+      // Calculate USDC price with built-in 3% discount + any coupon
+      const pricing = getUsdcPriceWithDiscount(body.planId, couponDiscount);
+      const amountUsd = pricing ? pricing.amountUsd : plan.amount / 100;
+      const originalUsd = pricing ? pricing.originalUsd : plan.amount / 100;
+
       const invoice = createUsdcInvoice(body.planId, amountUsd, body.email, body.agentId);
+
+      // If there's a coupon, save the extended invoice with discount info
+      if (couponRecord) {
+        // The invoice was already saved by createUsdcInvoice — update the coupon fields
+        // We'll handle this by saving extra fields after creation
+        try {
+          const { getDb } = await import('../db/database');
+          getDb()
+            .prepare('UPDATE usdc_invoices SET coupon_id = ?, discount_percent = ?, original_amount_usd = ? WHERE invoice_id = ?')
+            .run(couponRecord.id, couponDiscount, plan.amount / 100, invoice.invoiceId);
+          incrementCouponUsage(couponRecord.id);
+        } catch (e) {
+          logger.warn('Failed to update invoice with coupon info', { error: (e as Error).message });
+        }
+      }
 
       logger.info('USDC checkout created', {
         invoiceId: invoice.invoiceId,
@@ -130,6 +224,8 @@ router.post('/checkout', async (req: Request, res: Response) => {
         email: body.email,
         method: 'usdc',
         amountUsdc: invoice.amountUsdc,
+        couponCode: body.couponCode ?? null,
+        couponDiscount,
       });
 
       return res.json({
@@ -144,6 +240,13 @@ router.post('/checkout', async (req: Request, res: Response) => {
             currency: 'USDC',
             memo: invoice.memo,
             network: process.env.HEDERA_NETWORK ?? 'testnet',
+          },
+          pricing: {
+            stripePrice: plan.amount / 100,
+            usdcPrice: amountUsd,
+            usdcBaseDiscount: USDC_DISCOUNT_PERCENT,
+            couponDiscount: couponDiscount,
+            totalSavings: ((plan.amount / 100) - amountUsd).toFixed(2),
           },
           expiresAt: invoice.expiresAt,
           instructions: [
@@ -274,7 +377,7 @@ router.post('/usdc/verify/:invoiceId', async (req: Request, res: Response) => {
       hcsReceipt?.sequenceNumber,
     );
 
-    // ── Activate subscription: upgrade user tier ──
+    // ── Activate subscription: upgrade user tier + set expiry ──
     const invoiceRecord = getInvoiceRecord(invoiceId);
     let tierUpgraded = false;
     let newTier: string | null = null;
@@ -282,17 +385,13 @@ router.post('/usdc/verify/:invoiceId', async (req: Request, res: Response) => {
     if (invoiceRecord?.email) {
       const user = getUserByEmail(invoiceRecord.email);
       if (user) {
-        // Map plan ID to user tier
-        const planToTier: Record<string, 'standard' | 'pro' | 'elite'> = {
-          pro: 'pro',
-          elite: 'elite',
-          // API tiers also grant pro or elite dashboard access
-          starter: 'pro',
-          business: 'pro',
-          enterprise: 'elite',
-        };
         const targetTier = planToTier[invoice.planId] ?? 'pro';
         updateUserTier(user.id, targetTier);
+
+        // Set subscription expiry — extend from current if renewing
+        const expiresAt = calculateRenewalExpiry(user.subscriptionExpiresAt, invoice.planId);
+        setSubscriptionExpiry(user.id, expiresAt, 'usdc', invoice.planId);
+
         tierUpgraded = true;
         newTier = targetTier;
         logger.info('User tier upgraded via USDC payment', {
@@ -302,6 +401,7 @@ router.post('/usdc/verify/:invoiceId', async (req: Request, res: Response) => {
           newTier: targetTier,
           planId: invoice.planId,
           invoiceId,
+          subscriptionExpiresAt: new Date(expiresAt).toISOString(),
         });
       } else {
         logger.warn('USDC payment confirmed but user not found', {
@@ -340,6 +440,51 @@ router.post('/usdc/verify/:invoiceId', async (req: Request, res: Response) => {
       timestamp: Date.now(),
     });
   }
+});
+
+// ─── GET /v1/payments/renewal-status ─────────────────────────────────────────
+// Authenticated: Get subscription renewal info for current user
+
+router.get('/renewal-status', (req: Request, res: Response) => {
+  const userId = (req as any).user?.id;
+  if (!userId) {
+    return res.status(401).json({ success: false, error: 'Authentication required', timestamp: Date.now() });
+  }
+
+  const user = getUserById(userId);
+  if (!user) {
+    return res.status(404).json({ success: false, error: 'User not found', timestamp: Date.now() });
+  }
+
+  const now = Date.now();
+  const expiresAt = user.subscriptionExpiresAt;
+  const daysRemaining = expiresAt ? Math.max(0, Math.ceil((expiresAt - now) / (24 * 60 * 60 * 1000))) : null;
+  const isExpired = expiresAt ? expiresAt < now : false;
+  const isExpiringSoon = daysRemaining !== null && daysRemaining <= 30 && !isExpired;
+
+  // Get USDC renewal pricing
+  const planId = user.subscriptionPlanId;
+  const renewalPricing = planId ? USDC_PRICES[planId] : null;
+  const stripePlan = planId ? ALL_PLANS[planId] : null;
+
+  res.json({
+    success: true,
+    data: {
+      tier: user.tier,
+      planId: user.subscriptionPlanId,
+      method: user.subscriptionMethod,
+      expiresAt: user.subscriptionExpiresAt,
+      daysRemaining,
+      isExpired,
+      isExpiringSoon,
+      renewalPricing: renewalPricing ? {
+        usdcAmount: renewalPricing.amountUsd,
+        stripeAmount: stripePlan ? stripePlan.amount / 100 : null,
+        usdcDiscount: renewalPricing.discountPercent,
+      } : null,
+    },
+    timestamp: Date.now(),
+  });
 });
 
 // ─── POST /v1/payments/portal ────────────────────────────────────────────────
@@ -413,6 +558,128 @@ router.get('/subscriptions/:customerId', async (req: Request, res: Response) => 
   }
 });
 
+// ─── Coupon Endpoints ───────────────────────────────────────────────────────
+
+// POST /v1/payments/coupons — Create coupon (admin only)
+router.post('/coupons', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Admin access required', timestamp: Date.now() });
+  }
+
+  try {
+    const schema = z.object({
+      code: z.string().min(3).max(30),
+      discountPercent: z.number().min(1).max(100),
+      validUntil: z.number().optional(),
+      maxUses: z.number().optional(),
+      planRestriction: z.string().optional(),
+      renewalOnly: z.boolean().optional(),
+    });
+    const body = schema.parse(req.body);
+    const id = uuidv4();
+
+    createCoupon({
+      id,
+      code: body.code,
+      discountPercent: body.discountPercent,
+      validFrom: Date.now(),
+      validUntil: body.validUntil,
+      maxUses: body.maxUses,
+      planRestriction: body.planRestriction,
+      renewalOnly: body.renewalOnly,
+      createdBy: user.id,
+    });
+
+    logger.info('Coupon created', { id, code: body.code, discount: body.discountPercent, createdBy: user.id });
+
+    res.json({
+      success: true,
+      data: { id, code: body.code.toUpperCase(), discountPercent: body.discountPercent },
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, error: 'Validation error', details: err.errors, timestamp: Date.now() });
+    }
+    logger.error('Coupon creation failed', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to create coupon', timestamp: Date.now() });
+  }
+});
+
+// GET /v1/payments/coupons — List all coupons (admin only)
+router.get('/coupons', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Admin access required', timestamp: Date.now() });
+  }
+
+  res.json({
+    success: true,
+    data: listCoupons(),
+    timestamp: Date.now(),
+  });
+});
+
+// DELETE /v1/payments/coupons/:id — Deactivate coupon (admin only)
+router.delete('/coupons/:id', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Admin access required', timestamp: Date.now() });
+  }
+
+  deactivateCoupon(req.params.id);
+  logger.info('Coupon deactivated', { id: req.params.id, deactivatedBy: user.id });
+
+  res.json({
+    success: true,
+    message: 'Coupon deactivated',
+    timestamp: Date.now(),
+  });
+});
+
+// POST /v1/payments/coupons/validate — Validate a coupon code (any auth user)
+router.post('/coupons/validate', (req: Request, res: Response) => {
+  try {
+    const schema = z.object({
+      code: z.string(),
+      planId: z.string(),
+      isRenewal: z.boolean().optional().default(false),
+    });
+    const body = schema.parse(req.body);
+    const result = validateCoupon(body.code, body.planId, body.isRenewal);
+
+    if (!result.valid) {
+      return res.json({
+        success: true,
+        data: { valid: false, reason: result.reason },
+        timestamp: Date.now(),
+      });
+    }
+
+    // Calculate discounted price
+    const pricing = getUsdcPriceWithDiscount(body.planId, result.coupon!.discountPercent);
+    const stripePlan = ALL_PLANS[body.planId];
+
+    res.json({
+      success: true,
+      data: {
+        valid: true,
+        discountPercent: result.coupon!.discountPercent,
+        usdcPriceAfterDiscount: pricing?.amountUsd ?? null,
+        usdcPriceBefore: USDC_PRICES[body.planId]?.amountUsd ?? null,
+        stripePrice: stripePlan ? stripePlan.amount / 100 : null,
+      },
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, error: 'Validation error', details: err.errors, timestamp: Date.now() });
+    }
+    res.status(500).json({ success: false, error: 'Validation failed', timestamp: Date.now() });
+  }
+});
+
 // ─── POST /v1/payments/webhook ───────────────────────────────────────────────
 // Stripe webhook handler
 
@@ -449,14 +716,18 @@ router.post('/webhook', async (req: Request, res: Response) => {
             updateUserStripe(user.id, customerId, session.subscription as string);
             // Determine tier from plan
             const plan = priceId ? getPlanByPriceId(priceId) : undefined;
-            const planToTier: Record<string, 'pro' | 'elite'> = {
-              pro: 'pro', elite: 'elite',
-              starter: 'pro', business: 'pro', enterprise: 'elite',
-            };
             const targetTier = plan ? (planToTier[plan.tier] ?? 'pro') : 'pro';
             updateUserTier(user.id, targetTier);
+
+            // Set subscription expiry from Stripe's period end
+            const sub = session.subscription;
+            // Default to 1 year from now for annual plans
+            const expiresAt = calculateExpiryFromNow(plan?.tier ?? 'pro');
+            setSubscriptionExpiry(user.id, expiresAt, 'stripe', plan?.tier ?? 'pro');
+
             logger.info('Stripe checkout → tier upgraded', {
               userId: user.id, newTier: targetTier, customerId,
+              subscriptionExpiresAt: new Date(expiresAt).toISOString(),
             });
           }
         }
@@ -477,11 +748,12 @@ router.post('/webhook', async (req: Request, res: Response) => {
             const priceId = sub.items?.data?.[0]?.price?.id;
             const plan = priceId ? getPlanByPriceId(priceId) : undefined;
             if (plan) {
-              const planToTier: Record<string, 'pro' | 'elite'> = {
-                pro: 'pro', elite: 'elite',
-                starter: 'pro', business: 'pro', enterprise: 'elite',
-              };
               updateUserTier(user.id, planToTier[plan.tier] ?? 'pro');
+              // Update expiry from Stripe's current_period_end
+              if (sub.current_period_end) {
+                const expiresAt = sub.current_period_end * 1000; // Stripe uses seconds
+                setSubscriptionExpiry(user.id, expiresAt, 'stripe', plan.tier);
+              }
             }
           }
         }
@@ -499,6 +771,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
           const user = getUserByStripeCustomerId(sub.customer);
           if (user) {
             updateUserTier(user.id, 'standard');
+            setSubscriptionExpiry(user.id, Date.now(), 'stripe', 'standard');
             logger.info('Stripe subscription cancelled → downgraded to standard', {
               userId: user.id, customerId: sub.customer,
             });

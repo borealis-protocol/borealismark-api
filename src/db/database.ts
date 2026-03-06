@@ -402,7 +402,36 @@ function initSchema(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_watchlist_user ON user_watchlist(user_id);
     CREATE INDEX IF NOT EXISTS idx_watchlist_listing ON user_watchlist(listing_id);
+
+    /* ─── Coupons / Discount Codes ─── */
+    CREATE TABLE IF NOT EXISTS coupons (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      discount_percent INTEGER NOT NULL,
+      valid_from INTEGER NOT NULL,
+      valid_until INTEGER,
+      max_uses INTEGER,
+      times_used INTEGER NOT NULL DEFAULT 0,
+      plan_restriction TEXT,
+      renewal_only INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT,
+      created_at INTEGER NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_coupons_code ON coupons(code);
   `);
+
+  // Migrate: add subscription tracking columns to users table
+  const userCols = (db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!userCols.includes('subscription_expires_at')) db.exec("ALTER TABLE users ADD COLUMN subscription_expires_at INTEGER");
+  if (!userCols.includes('subscription_method'))     db.exec("ALTER TABLE users ADD COLUMN subscription_method TEXT");
+  if (!userCols.includes('subscription_plan_id'))    db.exec("ALTER TABLE users ADD COLUMN subscription_plan_id TEXT");
+
+  // Migrate: add coupon/discount columns to usdc_invoices table
+  const invCols = (db.prepare("PRAGMA table_info(usdc_invoices)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!invCols.includes('coupon_id'))         db.exec("ALTER TABLE usdc_invoices ADD COLUMN coupon_id TEXT");
+  if (!invCols.includes('discount_percent'))  db.exec("ALTER TABLE usdc_invoices ADD COLUMN discount_percent INTEGER DEFAULT 0");
+  if (!invCols.includes('original_amount_usd')) db.exec("ALTER TABLE usdc_invoices ADD COLUMN original_amount_usd REAL");
 
   // Migrate: add new columns to api_keys if upgrading from old schema
   const keyColumns = (db.prepare("PRAGMA table_info(api_keys)").all() as Array<{ name: string }>).map(r => r.name);
@@ -442,6 +471,9 @@ export interface UserRecord {
   role: 'user' | 'admin';
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
+  subscriptionExpiresAt: number | null;
+  subscriptionMethod: 'stripe' | 'usdc' | null;
+  subscriptionPlanId: string | null;
   createdAt: number;
   lastLoginAt: number | null;
   emailVerified: boolean;
@@ -457,6 +489,9 @@ function rowToUser(row: Record<string, unknown>): UserRecord {
     role: (row.role as 'user' | 'admin') ?? 'user',
     stripeCustomerId: row.stripe_customer_id as string | null,
     stripeSubscriptionId: row.stripe_subscription_id as string | null,
+    subscriptionExpiresAt: row.subscription_expires_at as number | null,
+    subscriptionMethod: row.subscription_method as 'stripe' | 'usdc' | null,
+    subscriptionPlanId: row.subscription_plan_id as string | null,
     createdAt: row.created_at as number,
     lastLoginAt: row.last_login_at as number | null,
     emailVerified: (row.email_verified as number) === 1,
@@ -734,6 +769,177 @@ export function cleanupExpiredUsdcInvoices(): number {
     .prepare("UPDATE usdc_invoices SET status = 'expired' WHERE status = 'pending' AND expires_at < ?")
     .run(Date.now());
   return result.changes;
+}
+
+// ─── Subscription Expiry Helpers ──────────────────────────────────────────────
+
+export function setSubscriptionExpiry(
+  userId: string,
+  expiresAt: number,
+  method: 'stripe' | 'usdc',
+  planId: string,
+): void {
+  getDb()
+    .prepare(
+      'UPDATE users SET subscription_expires_at = ?, subscription_method = ?, subscription_plan_id = ? WHERE id = ?',
+    )
+    .run(expiresAt, method, planId, userId);
+}
+
+export function getExpiredUsdcSubscriptions(): UserRecord[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM users WHERE subscription_method = 'usdc' AND subscription_expires_at < ? AND tier != 'standard' AND active = 1",
+    )
+    .all(Date.now()) as Array<Record<string, unknown>>;
+  return rows.map(rowToUser);
+}
+
+// ─── Coupon Queries ──────────────────────────────────────────────────────────
+
+export interface CouponRecord {
+  id: string;
+  code: string;
+  discountPercent: number;
+  validFrom: number;
+  validUntil: number | null;
+  maxUses: number | null;
+  timesUsed: number;
+  planRestriction: string | null;
+  renewalOnly: boolean;
+  createdBy: string | null;
+  createdAt: number;
+  active: boolean;
+}
+
+function rowToCoupon(row: Record<string, unknown>): CouponRecord {
+  return {
+    id: row.id as string,
+    code: row.code as string,
+    discountPercent: row.discount_percent as number,
+    validFrom: row.valid_from as number,
+    validUntil: row.valid_until as number | null,
+    maxUses: row.max_uses as number | null,
+    timesUsed: row.times_used as number,
+    planRestriction: row.plan_restriction as string | null,
+    renewalOnly: (row.renewal_only as number) === 1,
+    createdBy: row.created_by as string | null,
+    createdAt: row.created_at as number,
+    active: (row.active as number) === 1,
+  };
+}
+
+export function createCoupon(coupon: {
+  id: string;
+  code: string;
+  discountPercent: number;
+  validFrom: number;
+  validUntil?: number;
+  maxUses?: number;
+  planRestriction?: string;
+  renewalOnly?: boolean;
+  createdBy?: string;
+}): void {
+  getDb()
+    .prepare(
+      `INSERT INTO coupons (id, code, discount_percent, valid_from, valid_until, max_uses, plan_restriction, renewal_only, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      coupon.id, coupon.code.toUpperCase().trim(), coupon.discountPercent,
+      coupon.validFrom, coupon.validUntil ?? null, coupon.maxUses ?? null,
+      coupon.planRestriction ?? null, coupon.renewalOnly ? 1 : 0,
+      coupon.createdBy ?? null, Date.now(),
+    );
+}
+
+export function getCouponByCode(code: string): CouponRecord | null {
+  const row = getDb()
+    .prepare('SELECT * FROM coupons WHERE code = ? AND active = 1')
+    .get(code.toUpperCase().trim()) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return rowToCoupon(row);
+}
+
+export function getCouponById(id: string): CouponRecord | null {
+  const row = getDb()
+    .prepare('SELECT * FROM coupons WHERE id = ?')
+    .get(id) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return rowToCoupon(row);
+}
+
+export function listCoupons(): CouponRecord[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM coupons ORDER BY created_at DESC')
+    .all() as Array<Record<string, unknown>>;
+  return rows.map(rowToCoupon);
+}
+
+export function incrementCouponUsage(id: string): void {
+  getDb()
+    .prepare('UPDATE coupons SET times_used = times_used + 1 WHERE id = ?')
+    .run(id);
+}
+
+export function deactivateCoupon(id: string): void {
+  getDb()
+    .prepare('UPDATE coupons SET active = 0 WHERE id = ?')
+    .run(id);
+}
+
+export function validateCoupon(
+  code: string,
+  planId: string,
+  isRenewal: boolean,
+): { valid: boolean; coupon?: CouponRecord; reason?: string } {
+  const coupon = getCouponByCode(code);
+  if (!coupon) return { valid: false, reason: 'Coupon not found' };
+  if (!coupon.active) return { valid: false, reason: 'Coupon is inactive' };
+
+  const now = Date.now();
+  if (now < coupon.validFrom) return { valid: false, reason: 'Coupon is not yet valid' };
+  if (coupon.validUntil && now > coupon.validUntil) return { valid: false, reason: 'Coupon has expired' };
+  if (coupon.maxUses && coupon.timesUsed >= coupon.maxUses) return { valid: false, reason: 'Coupon usage limit reached' };
+  if (coupon.planRestriction && coupon.planRestriction !== planId) {
+    return { valid: false, reason: `Coupon only valid for ${coupon.planRestriction} plan` };
+  }
+  if (coupon.renewalOnly && !isRenewal) return { valid: false, reason: 'Coupon is only valid for renewals' };
+
+  return { valid: true, coupon };
+}
+
+// ─── Enhanced USDC Invoice Save (with discount fields) ───────────────────────
+
+export function saveUsdcInvoiceWithDiscount(invoice: {
+  invoiceId: string;
+  planId: string;
+  email?: string;
+  agentId?: string;
+  amountUsd: number;
+  amountUsdc: string;
+  treasuryAccountId: string;
+  tokenId: string;
+  memo: string;
+  expiresAt: number;
+  couponId?: string;
+  discountPercent?: number;
+  originalAmountUsd?: number;
+}): void {
+  getDb()
+    .prepare(
+      `INSERT INTO usdc_invoices
+        (invoice_id, plan_id, email, agent_id, amount_usd, amount_usdc,
+         treasury_account_id, token_id, memo, status, created_at, expires_at,
+         coupon_id, discount_percent, original_amount_usd)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      invoice.invoiceId, invoice.planId, invoice.email ?? null, invoice.agentId ?? null,
+      invoice.amountUsd, invoice.amountUsdc, invoice.treasuryAccountId, invoice.tokenId,
+      invoice.memo, Date.now(), invoice.expiresAt,
+      invoice.couponId ?? null, invoice.discountPercent ?? 0, invoice.originalAmountUsd ?? null,
+    );
 }
 
 // ─── Agent Queries ────────────────────────────────────────────────────────────

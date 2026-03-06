@@ -1,9 +1,9 @@
 /**
- * BorealisMark Stripe Configuration
+ * BorealisMark Stripe + USDC Pricing Configuration
  * Maps internal product tiers to Stripe product/price IDs
+ * Env-var overrides allow seamless sandbox → live migration
  *
- * Account: Borealis Protocol sandbox (acct_1T7KcEQsztBl8gR0)
- * Environment: Test/Sandbox
+ * Account: Borealis Protocol (acct_1T7KcEQsztBl8gR0)
  */
 
 export interface StripePlan {
@@ -22,8 +22,8 @@ export interface StripePlan {
 export const AGENT_PLANS: Record<string, StripePlan> = {
   pro: {
     name: 'BorealisMark Pro',
-    productId: 'prod_U5VmfMgKCZCh18',
-    priceId: 'price_1T7KkVQsztBl8gR06PqRED5X',
+    productId: process.env.STRIPE_PRO_PRODUCT_ID ?? 'prod_U5VmfMgKCZCh18',
+    priceId: process.env.STRIPE_PRO_PRICE_ID ?? 'price_1T7KkVQsztBl8gR06PqRED5X',
     amount: 9999,
     currency: 'usd',
     interval: 'year',
@@ -37,8 +37,8 @@ export const AGENT_PLANS: Record<string, StripePlan> = {
   },
   elite: {
     name: 'BorealisMark Elite',
-    productId: 'prod_U5VqdtaqhEhCc3',
-    priceId: 'price_1T7KpBQsztBl8gR0Sw0dIUlp',
+    productId: process.env.STRIPE_ELITE_PRODUCT_ID ?? 'prod_U5VqdtaqhEhCc3',
+    priceId: process.env.STRIPE_ELITE_PRICE_ID ?? 'price_1T7KpBQsztBl8gR0Sw0dIUlp',
     amount: 14999,
     currency: 'usd',
     interval: 'year',
@@ -58,8 +58,8 @@ export const AGENT_PLANS: Record<string, StripePlan> = {
 export const API_TIERS: Record<string, StripePlan> = {
   starter: {
     name: 'API Starter (Verify)',
-    productId: 'prod_U5Vsmz5uXncqiL',
-    priceId: 'price_1T7KqgQsztBl8gR0tdsJbqPb',
+    productId: process.env.STRIPE_STARTER_PRODUCT_ID ?? 'prod_U5Vsmz5uXncqiL',
+    priceId: process.env.STRIPE_STARTER_PRICE_ID ?? 'price_1T7KqgQsztBl8gR0tdsJbqPb',
     amount: 4900,
     currency: 'usd',
     interval: 'month',
@@ -73,8 +73,8 @@ export const API_TIERS: Record<string, StripePlan> = {
   },
   business: {
     name: 'API Business (Analyze)',
-    productId: 'prod_U5Vu2PTSyp5rN0',
-    priceId: 'price_1T7KsQQsztBl8gR0CzR812k2',
+    productId: process.env.STRIPE_BUSINESS_PRODUCT_ID ?? 'prod_U5Vu2PTSyp5rN0',
+    priceId: process.env.STRIPE_BUSINESS_PRICE_ID ?? 'price_1T7KsQQsztBl8gR0CzR812k2',
     amount: 19900,
     currency: 'usd',
     interval: 'month',
@@ -89,8 +89,8 @@ export const API_TIERS: Record<string, StripePlan> = {
   },
   enterprise: {
     name: 'API Enterprise (Predict)',
-    productId: 'prod_U5VvYWoeKZPDo5',
-    priceId: 'price_1T7KtzQsztBl8gR04V8Tw1Dt',
+    productId: process.env.STRIPE_ENTERPRISE_PRODUCT_ID ?? 'prod_U5VvYWoeKZPDo5',
+    priceId: process.env.STRIPE_ENTERPRISE_PRICE_ID ?? 'price_1T7KtzQsztBl8gR04V8Tw1Dt',
     amount: 49900,
     currency: 'usd',
     interval: 'month',
@@ -116,4 +116,65 @@ export function getPlanByPriceId(priceId: string): StripePlan | undefined {
 
 export function getPlanByProductId(productId: string): StripePlan | undefined {
   return Object.values(ALL_PLANS).find(p => p.productId === productId);
+}
+
+// ─── USDC Pricing (3% discount over Stripe — passes processing fee savings) ─
+
+export const USDC_DISCOUNT_PERCENT = 3;
+
+export interface UsdcPrice {
+  amountUsd: number;
+  stripePriceCents: number;
+  discountPercent: number;
+}
+
+export const USDC_PRICES: Record<string, UsdcPrice> = {
+  pro: {
+    amountUsd: 96.99,          // $99.99 − 3% ≈ $96.99
+    stripePriceCents: 9999,
+    discountPercent: USDC_DISCOUNT_PERCENT,
+  },
+  elite: {
+    amountUsd: 145.49,         // $149.99 − 3% ≈ $145.49
+    stripePriceCents: 14999,
+    discountPercent: USDC_DISCOUNT_PERCENT,
+  },
+  starter: {
+    amountUsd: 47.53,          // $49.00 − 3% ≈ $47.53
+    stripePriceCents: 4900,
+    discountPercent: USDC_DISCOUNT_PERCENT,
+  },
+  business: {
+    amountUsd: 193.03,         // $199.00 − 3% ≈ $193.03
+    stripePriceCents: 19900,
+    discountPercent: USDC_DISCOUNT_PERCENT,
+  },
+  enterprise: {
+    amountUsd: 484.03,         // $499.00 − 3% ≈ $484.03
+    stripePriceCents: 49900,
+    discountPercent: USDC_DISCOUNT_PERCENT,
+  },
+};
+
+/**
+ * Get the USDC price for a plan, optionally with an additional coupon discount.
+ */
+export function getUsdcPriceWithDiscount(
+  planId: string,
+  couponDiscountPercent: number = 0,
+): { amountUsd: number; originalUsd: number; totalDiscountPercent: number } | null {
+  const usdcPrice = USDC_PRICES[planId];
+  if (!usdcPrice) return null;
+
+  const baseUsdcAmount = usdcPrice.amountUsd;
+  const couponDiscount = couponDiscountPercent > 0
+    ? baseUsdcAmount * (couponDiscountPercent / 100)
+    : 0;
+  const finalAmount = Math.round((baseUsdcAmount - couponDiscount) * 100) / 100;
+
+  return {
+    amountUsd: finalAmount,
+    originalUsd: usdcPrice.amountUsd,
+    totalDiscountPercent: usdcPrice.discountPercent + couponDiscountPercent,
+  };
 }
