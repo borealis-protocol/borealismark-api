@@ -1900,9 +1900,16 @@ router.get('/storefronts/:slug', async (req: Request, res: Response) => {
       params.push(`%${search}%`, `%${search}%`);
     }
 
-    // Count
-    const countQuery = query.replace(/SELECT l\.\*, u\.name/, 'SELECT COUNT(*) as total');
-    const { total } = getDb().prepare(countQuery).get(...params) as any;
+    // Count — build separate count query to avoid regex issues
+    let countQuery = `SELECT COUNT(*) as total FROM marketplace_listings l
+                      JOIN users u ON l.user_id = u.id
+                      WHERE l.status = 'published' AND l.user_id = ?`;
+    const countParams: any[] = [(storefront as any).user_id];
+    if (category) { countQuery += ` AND l.category = ?`; countParams.push(category); }
+    if (platform) { countQuery += ` AND l.platform = ?`; countParams.push(platform); }
+    if (condition) { countQuery += ` AND l.condition = ?`; countParams.push(condition); }
+    if (search) { countQuery += ` AND (l.title LIKE ? OR l.description LIKE ?)`; countParams.push(`%${search}%`, `%${search}%`); }
+    const { total } = getDb().prepare(countQuery).get(...countParams) as any;
 
     // Sorting
     const validSorts = ['created_at', 'price_usdc', 'view_count'];
