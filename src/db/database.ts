@@ -684,6 +684,26 @@ function initSchema(db: Database.Database): void {
       converted_at TEXT DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_conversions_campaign ON marketing_conversions(campaign_id);
+
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+      id TEXT PRIMARY KEY,
+      listing_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      agent_name TEXT NOT NULL DEFAULT 'BorealisAgent',
+      task_type TEXT NOT NULL,
+      platform TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      status_message TEXT,
+      campaign_id TEXT,
+      tracking_code TEXT,
+      result_data TEXT DEFAULT '{}',
+      started_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_tasks_listing ON agent_tasks(listing_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_tasks_user ON agent_tasks(user_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status);
   `);
 
   // Migrate: add CAD pricing + shipping columns to marketplace_listings

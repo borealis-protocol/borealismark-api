@@ -2669,4 +2669,170 @@ router.get('/campaigns/:id/analytics', requireAuth, async (req: Request, res: Re
   }
 });
 
+// =============================================
+// AI Agent Task Endpoints
+// =============================================
+
+import { queueMarketingTasks, processQueuedTasks, getListingAgentStatus, getUserAgentTasks, getAgentSummary } from '../services/agentWorker';
+
+/**
+ * POST /v1/marketplace/agent/promote/:listingId — Queue AI agent marketing for a listing
+ */
+router.post('/agent/promote/:listingId', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    const { listingId } = req.params;
+
+    // Verify listing belongs to user
+    const listing = getDb().prepare(
+      'SELECT id, title FROM marketplace_listings WHERE id = ? AND user_id = ?'
+    ).get(listingId, userId) as any;
+    if (!listing) return res.status(404).json({ success: false, error: 'Listing not found or not yours' });
+
+    // Queue tasks for all platforms
+    const taskIds = queueMarketingTasks(listingId, userId);
+
+    // Process them immediately in the background
+    processQueuedTasks().catch(err => {
+      logger.error(`[Agent] Background processing failed: ${err.message}`);
+    });
+
+    res.json({
+      success: true,
+      data: {
+        message: `AI agents queued for ${listing.title}`,
+        taskIds,
+        listingId
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /v1/marketplace/agent/status/:listingId — Get agent task status for a listing
+ */
+router.get('/agent/status/:listingId', async (req: Request, res: Response) => {
+  try {
+    const { listingId } = req.params;
+    const tasks = getListingAgentStatus(listingId);
+
+    res.json({
+      success: true,
+      data: {
+        listingId,
+        tasks: tasks.map((t: any) => ({
+          id: t.id,
+          agentName: t.agent_name,
+          taskType: t.task_type,
+          platform: t.platform,
+          status: t.status,
+          statusMessage: t.status_message,
+          trackingCode: t.tracking_code,
+          updatedAt: t.updated_at
+        }))
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /v1/marketplace/agent/tasks — Get all agent tasks for the logged-in user
+ */
+router.get('/agent/tasks', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    const tasks = getUserAgentTasks(userId);
+    const summary = getAgentSummary(userId);
+
+    res.json({
+      success: true,
+      data: {
+        summary,
+        tasks: tasks.map((t: any) => ({
+          id: t.id,
+          listingId: t.listing_id,
+          listingTitle: t.listing_title,
+          agentName: t.agent_name,
+          taskType: t.task_type,
+          platform: t.platform,
+          status: t.status,
+          statusMessage: t.status_message,
+          trackingCode: t.tracking_code,
+          startedAt: t.started_at,
+          updatedAt: t.updated_at,
+          completedAt: t.completed_at
+        }))
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /v1/marketplace/agent/process — Trigger processing of queued tasks (admin only)
+ */
+router.post('/agent/process', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    // Check admin
+    const user = getDb().prepare('SELECT role FROM users WHERE id = ?').get(userId) as any;
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+
+    const processed = await processQueuedTasks();
+    res.json({ success: true, data: { processed } });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /v1/marketplace/agent/activity — Public endpoint showing recent agent activity
+ * (for showing "live" agent work on the marketplace)
+ */
+router.get('/agent/activity', async (_req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const recentTasks = db.prepare(`
+      SELECT at.id, at.agent_name, at.task_type, at.platform, at.status, at.status_message,
+             at.listing_id, at.updated_at, ml.title as listing_title
+      FROM agent_tasks at
+      LEFT JOIN marketplace_listings ml ON at.listing_id = ml.id
+      WHERE at.updated_at > datetime('now', '-24 hours')
+      ORDER BY at.updated_at DESC
+      LIMIT 20
+    `).all() as any[];
+
+    res.json({
+      success: true,
+      data: recentTasks.map((t: any) => ({
+        agentName: t.agent_name,
+        platform: t.platform,
+        status: t.status,
+        statusMessage: t.status_message,
+        listingId: t.listing_id,
+        listingTitle: t.listing_title ? t.listing_title.substring(0, 60) : '',
+        updatedAt: t.updated_at
+      }))
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 export default router;
