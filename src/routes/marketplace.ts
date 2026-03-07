@@ -2146,4 +2146,60 @@ router.delete('/listings/bulk', requireAuth, async (req: Request, res: Response)
   }
 });
 
+/**
+ * POST /v1/marketplace/admin/promote — Admin: promote user tier
+ */
+router.post('/admin/promote', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const adminId = authReq.user?.sub;
+    if (!adminId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    const admin = getDb().prepare('SELECT role FROM users WHERE id = ?').get(adminId) as any;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin access required' });
+    }
+
+    const { userId, tier } = req.body;
+    if (!userId || !tier) return res.status(400).json({ success: false, error: 'userId and tier required' });
+
+    getDb().prepare('UPDATE users SET tier = ? WHERE id = ?').run(tier, userId);
+    logger.info('User promoted', { userId, tier, by: adminId });
+
+    res.json({ success: true, message: `User ${userId} promoted to ${tier}` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /v1/marketplace/admin/reassign — Admin: reassign all listings from one user to another
+ */
+router.post('/admin/reassign', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const adminId = authReq.user?.sub;
+    if (!adminId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    const admin = getDb().prepare('SELECT role FROM users WHERE id = ?').get(adminId) as any;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin access required' });
+    }
+
+    const { fromUserId, toUserId } = req.body;
+    if (!fromUserId || !toUserId) return res.status(400).json({ success: false, error: 'fromUserId and toUserId required' });
+
+    const result = getDb().prepare('UPDATE marketplace_listings SET user_id = ? WHERE user_id = ?').run(toUserId, fromUserId);
+
+    // Also transfer storefront ownership
+    getDb().prepare('UPDATE seller_storefronts SET user_id = ? WHERE user_id = ?').run(toUserId, fromUserId);
+
+    logger.info('Listings reassigned', { from: fromUserId, to: toUserId, count: result.changes });
+
+    res.json({ success: true, reassigned: result.changes });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 export default router;
