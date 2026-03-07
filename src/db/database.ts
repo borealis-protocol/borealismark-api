@@ -527,6 +527,141 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_storefronts_slug ON seller_storefronts(slug);
   `);
 
+  // ── Marketplace Orders (escrow-based purchase tracking) ──────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS marketplace_orders (
+      id TEXT PRIMARY KEY,
+      listing_id TEXT NOT NULL,
+      buyer_id TEXT NOT NULL,
+      seller_id TEXT NOT NULL,
+      item_price_cad REAL NOT NULL,
+      shipping_cost_cad REAL NOT NULL DEFAULT 0,
+      total_cad REAL NOT NULL,
+      exchange_rate REAL NOT NULL,
+      total_usdc REAL NOT NULL,
+      conversion_timestamp INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending_payment',
+      buyer_deposit_memo TEXT,
+      seller_deposit_memo TEXT,
+      buyer_deposit_confirmed_at INTEGER,
+      seller_deposit_confirmed_at INTEGER,
+      shipping_address TEXT,
+      shipping_carrier TEXT,
+      tracking_number TEXT,
+      shipped_at INTEGER,
+      delivery_confirmed_at INTEGER,
+      hedera_transaction_id TEXT,
+      hcs_topic_id TEXT,
+      hcs_sequence_number INTEGER,
+      completed_at INTEGER,
+      settled_at INTEGER,
+      dispute_reason TEXT,
+      dispute_raised_by TEXT,
+      dispute_raised_at INTEGER,
+      rating INTEGER,
+      rating_comment TEXT,
+      rated_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (listing_id) REFERENCES marketplace_listings(id),
+      FOREIGN KEY (buyer_id) REFERENCES users(id),
+      FOREIGN KEY (seller_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_orders_buyer ON marketplace_orders(buyer_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_seller ON marketplace_orders(seller_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_listing ON marketplace_orders(listing_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_status ON marketplace_orders(status);
+    CREATE INDEX IF NOT EXISTS idx_orders_created ON marketplace_orders(created_at DESC);
+  `);
+
+  // ── Marketplace Escrow Deposits (individual deposit records) ─────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS marketplace_escrow_deposits (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      party TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      amount_usdc REAL NOT NULL,
+      memo TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      hedera_transaction_id TEXT,
+      confirmed_at INTEGER,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES marketplace_orders(id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_escrow_order ON marketplace_escrow_deposits(order_id);
+    CREATE INDEX IF NOT EXISTS idx_escrow_user ON marketplace_escrow_deposits(user_id);
+    CREATE INDEX IF NOT EXISTS idx_escrow_memo ON marketplace_escrow_deposits(memo);
+    CREATE INDEX IF NOT EXISTS idx_escrow_status ON marketplace_escrow_deposits(status);
+  `);
+
+  // ── Marketplace Carts ────────────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS marketplace_carts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      listing_id TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (listing_id) REFERENCES marketplace_listings(id),
+      UNIQUE(user_id, listing_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_carts_user ON marketplace_carts(user_id);
+    CREATE INDEX IF NOT EXISTS idx_carts_listing ON marketplace_carts(listing_id);
+  `);
+
+  // ── Exchange Rate Cache ──────────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS exchange_rates_cache (
+      id TEXT PRIMARY KEY,
+      from_currency TEXT NOT NULL,
+      to_currency TEXT NOT NULL,
+      rate REAL NOT NULL,
+      source TEXT NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_exchange_pair ON exchange_rates_cache(from_currency, to_currency);
+    CREATE INDEX IF NOT EXISTS idx_exchange_expires ON exchange_rates_cache(expires_at);
+  `);
+
+  // Migrate: add CAD pricing + shipping columns to marketplace_listings
+  const listingColsV2 = (db.prepare("PRAGMA table_info(marketplace_listings)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!listingColsV2.includes('price_cad'))          db.exec("ALTER TABLE marketplace_listings ADD COLUMN price_cad REAL");
+  if (!listingColsV2.includes('shipping_cost_cad'))  db.exec("ALTER TABLE marketplace_listings ADD COLUMN shipping_cost_cad REAL DEFAULT 0");
+  if (!listingColsV2.includes('video_url'))          db.exec("ALTER TABLE marketplace_listings ADD COLUMN video_url TEXT");
+
+  // Migrate: add featured flag to seller_storefronts
+  const sfCols = (db.prepare("PRAGMA table_info(seller_storefronts)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!sfCols.includes('featured')) db.exec("ALTER TABLE seller_storefronts ADD COLUMN featured INTEGER DEFAULT 0");
+
+  // Backfill price_cad from price_usdc for existing listings (initial rate: 1 USDC ≈ 1.37 CAD)
+  // This only runs once — subsequent listings will have price_cad set directly
+  {
+    const needsBackfill = db.prepare(
+      "SELECT COUNT(*) as cnt FROM marketplace_listings WHERE price_cad IS NULL AND price_usdc IS NOT NULL"
+    ).get() as { cnt: number };
+    if (needsBackfill.cnt > 0) {
+      const INITIAL_USDC_TO_CAD = 1.37; // approximate rate at migration time
+      db.prepare(
+        "UPDATE marketplace_listings SET price_cad = ROUND(price_usdc * ?, 2) WHERE price_cad IS NULL AND price_usdc IS NOT NULL"
+      ).run(INITIAL_USDC_TO_CAD);
+      logger.info(`Backfilled price_cad for ${needsBackfill.cnt} listings at rate 1 USDC = ${INITIAL_USDC_TO_CAD} CAD`);
+    }
+  }
+
+  // Set BundlesofJoy storefront as featured
+  {
+    const bojStore = db.prepare("SELECT id, featured FROM seller_storefronts WHERE slug = 'bundlesofjoy'").get() as { id: string; featured: number } | undefined;
+    if (bojStore && !bojStore.featured) {
+      db.prepare("UPDATE seller_storefronts SET featured = 1 WHERE id = ?").run(bojStore.id);
+      logger.info('Set BundlesofJoy storefront as featured');
+    }
+  }
+
   // Ensure the master API key exists with full admin scopes
   const masterKey = process.env.API_MASTER_KEY;
   if (!masterKey) {
@@ -1930,4 +2065,231 @@ export function updateStorefront(
 
   const query = `UPDATE seller_storefronts SET ${updates.join(', ')} WHERE id = ?`;
   getDb().prepare(query).run(...values);
+}
+
+export function getFeaturedStorefronts(): Record<string, unknown>[] {
+  return getDb()
+    .prepare(`
+      SELECT s.*,
+        (SELECT COUNT(*) FROM marketplace_listings l WHERE l.user_id = s.user_id AND l.status = 'published') as listing_count,
+        COALESCE(
+          (SELECT AVG(o.rating) FROM marketplace_orders o WHERE o.seller_id = s.user_id AND o.rating IS NOT NULL), 0
+        ) as avg_rating,
+        COALESCE(
+          (SELECT COUNT(*) FROM marketplace_orders o WHERE o.seller_id = s.user_id AND o.rating IS NOT NULL), 0
+        ) as rating_count
+      FROM seller_storefronts s
+      WHERE s.featured = 1
+      ORDER BY listing_count DESC
+    `)
+    .all() as Record<string, unknown>[];
+}
+
+// ─── Cart Queries ──────────────────────────────────────────────────────────────
+
+export function addToCart(userId: string, listingId: string): string {
+  const id = uuidv4();
+  const now = Date.now();
+  getDb()
+    .prepare(`
+      INSERT INTO marketplace_carts (id, user_id, listing_id, quantity, created_at, updated_at)
+      VALUES (?, ?, ?, 1, ?, ?)
+      ON CONFLICT(user_id, listing_id) DO UPDATE SET quantity = quantity + 1, updated_at = ?
+    `)
+    .run(id, userId, listingId, now, now, now);
+  return id;
+}
+
+export function getCartItems(userId: string): Record<string, unknown>[] {
+  return getDb()
+    .prepare(`
+      SELECT c.id, c.listing_id, c.quantity, c.created_at, c.updated_at,
+        l.title, l.description, l.price_cad, l.price_usdc, l.shipping_cost_cad,
+        l.images, l.status, l.condition, l.platform,
+        u.name as seller_name, l.user_id as seller_id
+      FROM marketplace_carts c
+      JOIN marketplace_listings l ON c.listing_id = l.id
+      JOIN users u ON l.user_id = u.id
+      WHERE c.user_id = ?
+      ORDER BY c.created_at DESC
+    `)
+    .all(userId) as Record<string, unknown>[];
+}
+
+export function removeFromCart(userId: string, listingId: string): boolean {
+  const result = getDb()
+    .prepare('DELETE FROM marketplace_carts WHERE user_id = ? AND listing_id = ?')
+    .run(userId, listingId);
+  return result.changes > 0;
+}
+
+export function clearCart(userId: string): number {
+  const result = getDb()
+    .prepare('DELETE FROM marketplace_carts WHERE user_id = ?')
+    .run(userId);
+  return result.changes;
+}
+
+// ─── Order Queries ─────────────────────────────────────────────────────────────
+
+export interface CreateOrderParams {
+  id: string;
+  listingId: string;
+  buyerId: string;
+  sellerId: string;
+  itemPriceCad: number;
+  shippingCostCad: number;
+  totalCad: number;
+  exchangeRate: number;
+  totalUsdc: number;
+  conversionTimestamp: number;
+  buyerDepositMemo: string;
+  sellerDepositMemo: string;
+  shippingAddress: string;
+}
+
+export function createOrder(params: CreateOrderParams): void {
+  const now = Date.now();
+  getDb()
+    .prepare(`
+      INSERT INTO marketplace_orders (
+        id, listing_id, buyer_id, seller_id,
+        item_price_cad, shipping_cost_cad, total_cad,
+        exchange_rate, total_usdc, conversion_timestamp,
+        status, buyer_deposit_memo, seller_deposit_memo,
+        shipping_address, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?)
+    `)
+    .run(
+      params.id, params.listingId, params.buyerId, params.sellerId,
+      params.itemPriceCad, params.shippingCostCad, params.totalCad,
+      params.exchangeRate, params.totalUsdc, params.conversionTimestamp,
+      params.buyerDepositMemo, params.sellerDepositMemo,
+      params.shippingAddress, now, now,
+    );
+}
+
+export function getOrderById(orderId: string): Record<string, unknown> | undefined {
+  return getDb()
+    .prepare(`
+      SELECT o.*,
+        l.title as listing_title, l.images as listing_images,
+        l.category as listing_category, l.condition as listing_condition,
+        buyer.name as buyer_name, buyer.email as buyer_email,
+        seller.name as seller_name, seller.email as seller_email,
+        sf.store_name as seller_store_name, sf.slug as seller_store_slug
+      FROM marketplace_orders o
+      JOIN marketplace_listings l ON o.listing_id = l.id
+      JOIN users buyer ON o.buyer_id = buyer.id
+      JOIN users seller ON o.seller_id = seller.id
+      LEFT JOIN seller_storefronts sf ON sf.user_id = o.seller_id
+      WHERE o.id = ?
+    `)
+    .get(orderId) as Record<string, unknown> | undefined;
+}
+
+export function getOrdersByUser(userId: string, role: 'buyer' | 'seller', limit: number, offset: number): { orders: Record<string, unknown>[]; total: number } {
+  const whereCol = role === 'buyer' ? 'buyer_id' : 'seller_id';
+  const total = (getDb()
+    .prepare(`SELECT COUNT(*) as cnt FROM marketplace_orders WHERE ${whereCol} = ?`)
+    .get(userId) as { cnt: number }).cnt;
+  const orders = getDb()
+    .prepare(`
+      SELECT o.*,
+        l.title as listing_title, l.images as listing_images,
+        buyer.name as buyer_name, seller.name as seller_name
+      FROM marketplace_orders o
+      JOIN marketplace_listings l ON o.listing_id = l.id
+      JOIN users buyer ON o.buyer_id = buyer.id
+      JOIN users seller ON o.seller_id = seller.id
+      WHERE o.${whereCol} = ?
+      ORDER BY o.created_at DESC
+      LIMIT ? OFFSET ?
+    `)
+    .all(userId, limit, offset) as Record<string, unknown>[];
+  return { orders, total };
+}
+
+export function updateOrderStatus(orderId: string, status: string, extraFields?: Record<string, unknown>): boolean {
+  const updates = ['status = ?', 'updated_at = ?'];
+  const values: unknown[] = [status, Date.now()];
+
+  if (extraFields) {
+    for (const [key, value] of Object.entries(extraFields)) {
+      updates.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+  values.push(orderId);
+  const result = getDb()
+    .prepare(`UPDATE marketplace_orders SET ${updates.join(', ')} WHERE id = ?`)
+    .run(...values);
+  return result.changes > 0;
+}
+
+// ─── Escrow Deposit Queries ────────────────────────────────────────────────────
+
+export function createEscrowDeposit(
+  orderId: string, party: 'buyer' | 'seller', userId: string, amountUsdc: number, memo: string,
+): string {
+  const id = uuidv4();
+  getDb()
+    .prepare(`
+      INSERT INTO marketplace_escrow_deposits (id, order_id, party, user_id, amount_usdc, memo, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+    `)
+    .run(id, orderId, party, userId, amountUsdc, memo, Date.now());
+  return id;
+}
+
+export function getEscrowDeposits(orderId: string): Record<string, unknown>[] {
+  return getDb()
+    .prepare('SELECT * FROM marketplace_escrow_deposits WHERE order_id = ? ORDER BY created_at')
+    .all(orderId) as Record<string, unknown>[];
+}
+
+export function confirmEscrowDeposit(depositId: string, hederaTransactionId: string): boolean {
+  const result = getDb()
+    .prepare(`
+      UPDATE marketplace_escrow_deposits
+      SET status = 'confirmed', hedera_transaction_id = ?, confirmed_at = ?
+      WHERE id = ? AND status = 'pending'
+    `)
+    .run(hederaTransactionId, Date.now(), depositId);
+  return result.changes > 0;
+}
+
+export function settleEscrowDeposits(orderId: string): boolean {
+  const result = getDb()
+    .prepare(`
+      UPDATE marketplace_escrow_deposits
+      SET status = 'settled'
+      WHERE order_id = ? AND status = 'confirmed'
+    `)
+    .run(orderId);
+  return result.changes > 0;
+}
+
+// ─── Exchange Rate Cache Queries ───────────────────────────────────────────────
+
+export function getCachedExchangeRate(from: string, to: string): { rate: number; source: string; fetchedAt: number } | null {
+  const row = getDb()
+    .prepare(`
+      SELECT rate, source, fetched_at
+      FROM exchange_rates_cache
+      WHERE from_currency = ? AND to_currency = ? AND expires_at > ?
+      ORDER BY fetched_at DESC LIMIT 1
+    `)
+    .get(from, to, Date.now()) as { rate: number; source: string; fetched_at: number } | undefined;
+  return row ? { rate: row.rate, source: row.source, fetchedAt: row.fetched_at } : null;
+}
+
+export function setCachedExchangeRate(from: string, to: string, rate: number, source: string, ttlMs: number): void {
+  const now = Date.now();
+  getDb()
+    .prepare(`
+      INSERT INTO exchange_rates_cache (id, from_currency, to_currency, rate, source, fetched_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(uuidv4(), from, to, rate, source, now, now + ttlMs);
 }

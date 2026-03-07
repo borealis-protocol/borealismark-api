@@ -15,6 +15,7 @@ import webhooksRouter from './routes/webhooks';
 import paymentsRouter from './routes/payments';
 import terminalRouter from './routes/terminal';
 import marketplaceRouter from './routes/marketplace';
+import ordersRouter from './routes/orders';
 import usageRouter from './routes/usage';
 import docsRouter from './routes/docs';
 import { cleanupExpiredInvoices } from './hedera/usdc';
@@ -87,6 +88,7 @@ app.use('/v1/webhooks', webhooksRouter);
 app.use('/v1/payments', paymentsRouter);
 app.use('/v1/terminal', terminalRouter);
 app.use('/v1/marketplace', marketplaceRouter);
+app.use('/v1/marketplace', ordersRouter);
 app.use('/v1/usage',    usageRouter);
 app.use('/v1/docs',     docsRouter);
 

@@ -73,6 +73,8 @@ const ListingCreateSchema = z.object({
     'marketing', 'other',
   ]),
   priceUsdc: z.number().min(0).max(1000000).optional(),
+  priceCad: z.number().min(0).max(1000000).optional(),
+  shippingCostCad: z.number().min(0).max(10000).default(0),
   tradeFor: z.string().max(500).optional(),
   tags: z.array(z.string().max(30)).max(10).optional().default([]),
   agentId: z.string().uuid().optional(),
@@ -81,6 +83,7 @@ const ListingCreateSchema = z.object({
   sku: z.string().max(100).optional(),
   externalUrl: z.string().url().max(500).optional(),
   externalSource: z.enum(['ebay', 'amazon', 'other']).optional(),
+  videoUrl: z.string().url().max(500).optional(),
 });
 
 const ListingUpdateSchema = z.object({
@@ -281,7 +284,9 @@ router.get('/listings', async (req: Request, res: Response) => {
     const condition = req.query.condition as string;
     const storefront = req.query.storefront as string;
     const page = Math.max(1, Number(req.query.page) || 1);
-    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+    const allowedLimits = [20, 40, 60, 80, 100];
+    const rawLimit = Number(req.query.limit) || 20;
+    const limit = allowedLimits.includes(rawLimit) ? rawLimit : Math.min(100, Math.max(1, rawLimit));
 
     let query = `SELECT l.*, u.name as seller_name, u.email as seller_email, u.tier as seller_tier, u.created_at as seller_created_at,
                  (SELECT COUNT(*) FROM listing_likes WHERE listing_id = l.id) as like_count
@@ -339,6 +344,8 @@ router.get('/listings', async (req: Request, res: Response) => {
           listingType: l.listing_type,
           category: l.category,
           priceUsdc: l.price_usdc,
+          priceCad: l.price_cad,
+          shippingCostCad: l.shipping_cost_cad || 0,
           tradeFor: l.trade_for,
           tags: JSON.parse(l.tags || '[]'),
           condition: l.condition,
@@ -419,7 +426,8 @@ router.get('/listings/my', requireAuth, async (req: Request, res: Response) => {
 router.get('/listings/:id', async (req: Request, res: Response) => {
   try {
     const listing = getDb().prepare(`
-      SELECT l.*, u.name as seller_name
+      SELECT l.*, u.name as seller_name, u.tier as seller_tier, u.created_at as seller_created_at,
+        (SELECT COUNT(*) FROM listing_likes WHERE listing_id = l.id) as like_count
       FROM marketplace_listings l
       JOIN users u ON l.user_id = u.id
       WHERE l.id = ?
@@ -433,6 +441,11 @@ router.get('/listings/:id', async (req: Request, res: Response) => {
     getDb().prepare('UPDATE marketplace_listings SET view_count = view_count + 1 WHERE id = ?')
       .run(req.params.id);
 
+    // Get seller storefront info
+    const storefront = getDb().prepare(
+      'SELECT slug, store_name FROM seller_storefronts WHERE user_id = ?'
+    ).get(listing.user_id) as { slug: string; store_name: string } | undefined;
+
     res.json({
       success: true,
       data: {
@@ -443,16 +456,26 @@ router.get('/listings/:id', async (req: Request, res: Response) => {
         listingType: listing.listing_type,
         category: listing.category,
         priceUsdc: listing.price_usdc,
+        priceCad: listing.price_cad,
+        shippingCostCad: listing.shipping_cost_cad || 0,
         tradeFor: listing.trade_for,
         tags: JSON.parse(listing.tags || '[]'),
+        images: JSON.parse(listing.images || '[]'),
         condition: listing.condition,
         platform: listing.platform,
         sku: listing.sku,
         externalUrl: listing.external_url,
         externalSource: listing.external_source,
+        videoUrl: listing.video_url,
         sellerName: listing.seller_name,
+        sellerTier: listing.seller_tier || 'standard',
+        sellerVerified: listing.seller_tier === 'pro' || listing.seller_tier === 'elite',
+        sellerMemberSince: listing.seller_created_at,
+        sellerStoreSlug: storefront?.slug,
+        sellerStoreName: storefront?.store_name,
         status: listing.status,
         hasAgent: !!listing.assigned_agent_id,
+        likeCount: listing.like_count || 0,
         viewCount: listing.view_count + 1,
         createdAt: listing.created_at,
         publishedAt: listing.published_at,
@@ -1861,6 +1884,36 @@ router.post('/storefronts', requireAuth, async (req: Request, res: Response) => 
 });
 
 /**
+ * GET /v1/marketplace/storefronts/featured — Get featured vendor storefronts
+ * Public endpoint — must be registered BEFORE /:slug route.
+ */
+router.get('/storefronts/featured', async (_req: Request, res: Response) => {
+  try {
+    const { getFeaturedStorefronts } = await import('../db/database');
+    const storefronts = getFeaturedStorefronts();
+
+    res.json({
+      success: true,
+      data: storefronts.map(s => ({
+        id: s.id,
+        slug: s.slug,
+        storeName: s.store_name,
+        description: s.description,
+        logoUrl: s.logo_url,
+        bannerUrl: s.banner_url,
+        listingCount: s.listing_count,
+        avgRating: Math.round((s.avg_rating as number) * 10) / 10,
+        ratingCount: s.rating_count,
+        featured: true,
+      })),
+    });
+  } catch (err: any) {
+    logger.error('Featured storefronts error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch featured vendors' });
+  }
+});
+
+/**
  * GET /v1/marketplace/storefronts/:slug — Get storefront details and listings (PUBLIC)
  */
 router.get('/storefronts/:slug', async (req: Request, res: Response) => {
@@ -2037,6 +2090,8 @@ const BulkListingSchema = z.object({
     'marketing', 'other',
   ]),
   priceUsdc: z.number().min(0).max(1000000).optional(),
+  priceCad: z.number().min(0).max(1000000).optional(),
+  shippingCostCad: z.number().min(0).max(10000).default(0),
   tradeFor: z.string().max(500).optional(),
   tags: z.array(z.string().max(30)).max(10).optional().default([]),
   condition: z.enum(['new', 'like-new', 'good', 'acceptable']).optional(),
@@ -2044,7 +2099,8 @@ const BulkListingSchema = z.object({
   sku: z.string().max(100).optional(),
   externalUrl: z.string().url().max(500).optional(),
   externalSource: z.enum(['ebay', 'amazon', 'other']).optional(),
-  images: z.array(z.string().url()).max(10).optional().default([]),
+  images: z.array(z.string().url()).max(12).optional().default([]),
+  videoUrl: z.string().url().max(500).optional(),
 });
 
 const BulkImportSchema = z.object({
