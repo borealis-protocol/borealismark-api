@@ -287,8 +287,8 @@ router.get('/leaderboard', (req: Request, res: Response) => {
 
     res.json({ success: true, data });
   } catch (err: any) {
-    logger.error('Get leaderboard error', { error: err.message });
-    res.status(500).json({ success: false, error: 'Failed to get leaderboard' });
+    logger.error('Get leaderboard error', { error: err.message, stack: err.stack });
+    res.status(500).json({ success: false, error: 'Failed to get leaderboard', details: err.message });
   }
 });
 
@@ -302,15 +302,15 @@ router.get('/stats', (req: Request, res: Response) => {
     res.json({
       success: true,
       data: {
-        totalBots: stats.totalBots,
-        byTier: stats.byTier,
-        avgStarRating: stats.avgStarRating.toFixed(2),
-        avgApPoints: stats.avgApPoints.toFixed(0),
+        totalBots: stats.totalBots || 0,
+        byTier: stats.byTier || {},
+        avgStarRating: (stats.avgStarRating || 0).toFixed(2),
+        avgApPoints: (stats.avgApPoints || 0).toFixed(0),
       },
     });
   } catch (err: any) {
-    logger.error('Get stats error', { error: err.message });
-    res.status(500).json({ success: false, error: 'Failed to get stats' });
+    logger.error('Get stats error', { error: err.message, stack: err.stack });
+    res.status(500).json({ success: false, error: 'Failed to get stats', details: err.message });
   }
 });
 
