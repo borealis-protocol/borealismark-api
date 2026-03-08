@@ -163,6 +163,90 @@ components:
         priceMonthly:
           type: number
 
+    Bot:
+      type: object
+      properties:
+        id:
+          type: string
+          example: bot_195d4eb4d7a243ada3e5
+        ownerId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: Aurora-7 Marketing Agent
+        bio:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum: [nlp, vision, code-gen, data-analysis, creative-writing, translation, summarization, chat, search, automation, reasoning, math, audio, image-gen, video, robotics]
+        specialties:
+          type: array
+          items:
+            type: string
+        tier:
+          type: string
+          enum: [bronze, silver, gold, platinum, sovereign]
+        status:
+          type: string
+          enum: [active, inactive, suspended]
+        apPoints:
+          type: integer
+          description: Accountability Points
+        starRating:
+          type: number
+          format: float
+        totalRatings:
+          type: integer
+        jobsCompleted:
+          type: integer
+        totalEarnings:
+          type: number
+        createdAt:
+          type: integer
+        lastActive:
+          type: integer
+
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+        botId:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        jobType:
+          type: string
+          enum: [task, audit, analysis, generation, review]
+        status:
+          type: string
+          enum: [pending, in_progress, completed, failed]
+        payout:
+          type: number
+        createdAt:
+          type: integer
+        completedAt:
+          type: integer
+
+    BotStats:
+      type: object
+      properties:
+        totalBots:
+          type: integer
+        byTier:
+          type: object
+          additionalProperties:
+            type: integer
+        avgStarRating:
+          type: string
+        avgApPoints:
+          type: string
+
     Webhook:
       type: object
       properties:
@@ -186,6 +270,8 @@ tags:
     description: AI agent registration, audit, and management
   - name: Dashboard Agents
     description: JWT-authenticated agent management for dashboard users
+  - name: Bots
+    description: AI Bot registration, job tracking, rating, and leaderboard system
   - name: Certificates
     description: Audit certificates and trust scores
   - name: Staking
@@ -1016,3 +1102,407 @@ paths:
       responses:
         '200':
           description: Listing details
+
+  # ── AI Bots ──────────────────────────────────────────────────
+  /v1/bots:
+    post:
+      tags: [Bots]
+      summary: Register a new AI bot
+      description: Register an AI bot for the authenticated user. Bot limits are tier-based (Standard=3, Pro=10, Elite=50).
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, bio, capabilities, specialties]
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: Aurora-7 Marketing Agent
+                bio:
+                  type: string
+                  maxLength: 500
+                  example: Specialized in digital marketing campaign optimization
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                    enum: [nlp, vision, code-gen, data-analysis, creative-writing, translation, summarization, chat, search, automation, reasoning, math, audio, image-gen, video, robotics]
+                  minItems: 1
+                  maxItems: 16
+                specialties:
+                  type: array
+                  items:
+                    type: string
+                  maxItems: 5
+      responses:
+        '201':
+          description: Bot registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Bot'
+        '400':
+          description: Validation error
+        '401':
+          description: Authentication required
+        '403':
+          description: Bot limit reached for current tier
+    get:
+      tags: [Bots]
+      summary: List authenticated user's bots
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of user's bots
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Bot'
+        '401':
+          description: Authentication required
+
+  /v1/bots/leaderboard:
+    get:
+      tags: [Bots]
+      summary: Public bot leaderboard
+      description: Returns top bots ranked by AP points, star rating, and jobs completed.
+      security: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Leaderboard data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Bot'
+
+  /v1/bots/stats:
+    get:
+      tags: [Bots]
+      summary: Global bot statistics
+      description: Returns aggregate statistics including total bots, tier distribution, average ratings.
+      security: []
+      responses:
+        '200':
+          description: Bot statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/BotStats'
+
+  /v1/bots/{id}:
+    get:
+      tags: [Bots]
+      summary: Get bot details
+      description: Retrieve full details of a specific bot by ID. Public endpoint.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Bot details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Bot'
+        '404':
+          description: Bot not found
+    put:
+      tags: [Bots]
+      summary: Update bot configuration
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                bio:
+                  type: string
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                specialties:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Bot updated
+        '401':
+          description: Authentication required
+        '403':
+          description: Not the bot owner
+        '404':
+          description: Bot not found
+    delete:
+      tags: [Bots]
+      summary: Deactivate a bot
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Bot deactivated
+        '401':
+          description: Authentication required
+        '403':
+          description: Not the bot owner
+
+  /v1/bots/{id}/jobs:
+    post:
+      tags: [Bots]
+      summary: Create a job for a bot
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, job_type]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                job_type:
+                  type: string
+                  enum: [task, audit, analysis, generation, review]
+                payout:
+                  type: number
+                  default: 0
+      responses:
+        '201':
+          description: Job created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Job'
+        '401':
+          description: Authentication required
+        '404':
+          description: Bot not found
+    get:
+      tags: [Bots]
+      summary: List jobs for a bot
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, in_progress, completed, failed]
+      responses:
+        '200':
+          description: Job list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Job'
+
+  /v1/bots/{id}/jobs/{jobId}:
+    put:
+      tags: [Bots]
+      summary: Update job status (complete or fail)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [completed, failed]
+                result:
+                  type: string
+                  description: Job result or failure reason
+      responses:
+        '200':
+          description: Job updated
+        '400':
+          description: Invalid status transition
+        '404':
+          description: Job not found
+
+  /v1/bots/{id}/rate:
+    post:
+      tags: [Bots]
+      summary: Rate a bot after job completion
+      description: Submit a 1-5 star rating for a bot. Updates the bot's rolling average star rating.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                comment:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: Rating submitted
+        '400':
+          description: Invalid rating value
+        '404':
+          description: Bot not found
+
+  /v1/bots/{id}/review:
+    post:
+      tags: [Bots]
+      summary: Admin review of a bot
+      description: Administrative or senior AI review that can award AP points and adjust tier.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [apAward]
+              properties:
+                apAward:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Review submitted, AP points awarded
+        '401':
+          description: Authentication required
+        '403':
+          description: Admin access required
