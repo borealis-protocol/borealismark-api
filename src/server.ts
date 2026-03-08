@@ -20,8 +20,8 @@ import usageRouter from './routes/usage';
 import docsRouter from './routes/docs';
 import imageProxyRouter from './routes/imageProxy';
 import { cleanupExpiredInvoices } from './hedera/usdc';
-import { getExpiredUsdcSubscriptions, updateUserTier, getExpiredSanctions, upsertUserSanction, getDb } from './db/database';
-import { moderateServerSide, determineAction, actionToSanctionParams } from './middleware/messageModeration';
+import { getExpiredUsdcSubscriptions, updateUserTier, getExpiredSanctions, upsertUserSanction } from './db/database';
+import { moderateServerSide, determineAction, actionToSanctionParams, type SanctionAction } from './middleware/messageModeration';
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
