@@ -44,9 +44,9 @@ const router = Router();
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const BOT_LIMITS = {
-  standard: 5,
-  pro: 20,
-  elite: 100,
+  standard: 1,
+  pro: 5,
+  elite: 25,
 };
 
 const TIER_THRESHOLDS: Record<string, number> = {
@@ -278,11 +278,20 @@ router.get('/leaderboard', (req: Request, res: Response) => {
       id: bot.id,
       ownerId: bot.owner_id,
       name: bot.name,
+      bio: bot.bio,
+      capabilities: bot.capabilities ? JSON.parse(bot.capabilities) : [],
+      specialties: bot.specialties ? JSON.parse(bot.specialties) : [],
       tier: bot.tier,
       apPoints: bot.ap_points,
+      bmScore: bot.bm_score,
       starRating: bot.star_rating,
       totalRatings: bot.total_ratings,
       jobsCompleted: bot.jobs_completed,
+      jobsFailed: bot.jobs_failed,
+      status: bot.status,
+      verified: bot.status === 'active',
+      flagged: bot.status === 'suspended',
+      createdAt: bot.created_at,
     }));
 
     res.json({ success: true, data });
