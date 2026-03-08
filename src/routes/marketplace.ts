@@ -42,7 +42,7 @@ import { z } from 'zod';
 import { v4 as uuid } from 'uuid';
 import { requireAuth, type AuthRequest } from './auth';
 import { logger } from '../middleware/logger';
-import { getDb, createStorefront, getStorefrontBySlug, getStorefrontByUserId, updateStorefront } from '../db/database';
+import { getDb, createStorefront, getStorefrontBySlug, getStorefrontByUserId, updateStorefront, getUserSanction, addViolation, upsertUserSanction, getViolationCount, getUserViolations, getAllViolations, getAllSanctions } from '../db/database';
 import {
   USDC_TOKEN_ID,
   TREASURY_ACCOUNT_ID,
@@ -58,6 +58,13 @@ import {
   addProhibitedItem,
   removeProhibitedItem,
 } from '../db/database';
+import {
+  moderateServerSide,
+  determineAction,
+  actionToSanctionParams,
+  formatSanctionStatus,
+  type SanctionAction,
+} from '../middleware/messageModeration';
 import { importEbayStore } from '../services/ebayScraper';
 import { createHash } from 'crypto';
 
@@ -814,12 +821,48 @@ router.patch('/audits/:id', requireAuth, async (req: Request, res: Response) => 
 
 /**
  * POST /v1/marketplace/threads — Start a new DM thread
+ *
+ * Also applies moderation enforcement to the initial message.
  */
 router.post('/threads', requireAuth, async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthRequest;
     const senderId = authReq.user?.sub;
     if (!senderId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    // ─── Check sender's sanction status ──────────────────────────────────
+    const sanction = getUserSanction(senderId);
+    if (sanction) {
+      const now = Date.now();
+
+      if (sanction.status === 'banned') {
+        return res.status(403).json({
+          success: false,
+          error: 'Your account has been permanently suspended for policy violations.',
+          banned: true,
+        });
+      }
+
+      if (sanction.status === 'suspended' && sanction.suspended_until && sanction.suspended_until > now) {
+        const date = new Date(sanction.suspended_until).toLocaleString();
+        return res.status(403).json({
+          success: false,
+          error: `Your account is suspended until ${date} for policy violations.`,
+          suspended: true,
+          suspendedUntil: sanction.suspended_until,
+        });
+      }
+
+      if (sanction.status === 'muted' && sanction.muted_until && sanction.muted_until > now) {
+        const date = new Date(sanction.muted_until).toLocaleString();
+        return res.status(403).json({
+          success: false,
+          error: `You are muted until ${date}. Please review our community guidelines.`,
+          muted: true,
+          mutedUntil: sanction.muted_until,
+        });
+      }
+    }
 
     const parsed = ThreadCreateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -833,6 +876,62 @@ router.post('/threads', requireAuth, async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'Cannot message yourself' });
     }
 
+    // ─── Moderate the initial message ────────────────────────────────────
+    const modResult = moderateServerSide(initialMessage);
+
+    if (modResult.blocked) {
+      // Get current violation count and determine action
+      const violationCount = (sanction?.violation_count ?? 0) + 1;
+      const action = determineAction(violationCount, modResult.severity);
+
+      // Log the violation
+      addViolation(
+        senderId,
+        modResult.violationType || 'unknown',
+        modResult.severity,
+        null,
+        null,  // no thread yet since we're blocking creation
+        JSON.stringify(modResult.matchedPatterns),
+        action,
+      );
+
+      // Apply the sanction
+      const sanctionParams = actionToSanctionParams(action as SanctionAction);
+      upsertUserSanction(
+        senderId,
+        sanctionParams.status,
+        sanctionParams.mutedUntil,
+        sanctionParams.suspendedUntil,
+        violationCount,
+      );
+
+      logger.warn('Thread creation blocked by content moderation', {
+        senderId,
+        recipientId,
+        violationType: modResult.violationType,
+        severity: modResult.severity,
+        patterns: modResult.matchedPatterns,
+        action,
+      });
+
+      return res.status(400).json({
+        success: false,
+        error: `Message violates community guidelines (${modResult.violationType}). ${
+          action === 'mute_24h' ? 'You have been muted for 24 hours.' :
+          action === 'suspend_7d' ? 'Your account has been suspended for 7 days.' :
+          action === 'permanent_ban' ? 'Your account has been permanently suspended.' :
+          'Please review our community guidelines.'
+        }`,
+        moderation: {
+          blocked: true,
+          reason: modResult.reason,
+          violationType: modResult.violationType,
+          severity: modResult.severity,
+          action,
+        },
+      });
+    }
+
     // Check if thread already exists between these two for this listing/contract
     const existing = getDb().prepare(`
       SELECT id FROM message_threads
@@ -842,18 +941,33 @@ router.post('/threads', requireAuth, async (req: Request, res: Response) => {
         AND status = 'active'
     `).get(senderId, recipientId, recipientId, senderId, listingId ?? '', contractId ?? '') as any;
 
+    let finalMessage = initialMessage;
+    if (!modResult.clean) {
+      finalMessage = modResult.filteredText;
+      // Log warning-level violation
+      addViolation(
+        senderId,
+        modResult.violationType || 'unknown',
+        modResult.severity,
+        null,
+        null,
+        JSON.stringify(modResult.matchedPatterns),
+        'warning',
+      );
+    }
+
     if (existing) {
       // Thread exists — just add the message
       const msgId = uuid();
       const now = Date.now();
       getDb().prepare('INSERT INTO messages (id, thread_id, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(msgId, existing.id, senderId, initialMessage, now);
+        .run(msgId, existing.id, senderId, finalMessage, now);
       getDb().prepare('UPDATE message_threads SET updated_at = ? WHERE id = ?')
         .run(now, existing.id);
 
       return res.json({
         success: true,
-        data: { threadId: existing.id, messageId: msgId, isNew: false },
+        data: { threadId: existing.id, messageId: msgId, isNew: false, filtered: !modResult.clean },
       });
     }
 
@@ -867,13 +981,13 @@ router.post('/threads', requireAuth, async (req: Request, res: Response) => {
     `).run(threadId, listingId ?? null, contractId ?? null, senderId, recipientId, subject, now, now);
 
     getDb().prepare('INSERT INTO messages (id, thread_id, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(msgId, threadId, senderId, initialMessage, now);
+      .run(msgId, threadId, senderId, finalMessage, now);
 
     logger.info('Message thread created', { threadId, senderId, recipientId, listingId, contractId });
 
     res.status(201).json({
       success: true,
-      data: { threadId, messageId: msgId, isNew: true },
+      data: { threadId, messageId: msgId, isNew: true, filtered: !modResult.clean },
     });
   } catch (err: any) {
     logger.error('Thread creation error', { error: err.message });
@@ -983,11 +1097,51 @@ router.get('/threads/:id', requireAuth, async (req: Request, res: Response) => {
 
 /**
  * POST /v1/marketplace/threads/:id/messages — Send a message
+ *
+ * With server-side content moderation enforcement:
+ *   1. Check if user is muted/suspended/banned
+ *   2. Run moderation scan on message
+ *   3. Block if critical/major violations found
+ *   4. Log violations and apply escalating sanctions
  */
 router.post('/threads/:id/messages', requireAuth, async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthRequest;
     const userId = authReq.user?.sub;
+
+    // ─── Step 1: Check user sanction status ─────────────────────────────────
+    const sanction = getUserSanction(userId!);
+    if (sanction) {
+      const now = Date.now();
+
+      if (sanction.status === 'banned') {
+        return res.status(403).json({
+          success: false,
+          error: 'Your account has been permanently suspended for policy violations.',
+          banned: true,
+        });
+      }
+
+      if (sanction.status === 'suspended' && sanction.suspended_until && sanction.suspended_until > now) {
+        const date = new Date(sanction.suspended_until).toLocaleString();
+        return res.status(403).json({
+          success: false,
+          error: `Your account is suspended until ${date} for policy violations.`,
+          suspended: true,
+          suspendedUntil: sanction.suspended_until,
+        });
+      }
+
+      if (sanction.status === 'muted' && sanction.muted_until && sanction.muted_until > now) {
+        const date = new Date(sanction.muted_until).toLocaleString();
+        return res.status(403).json({
+          success: false,
+          error: `You are muted until ${date}. Please review our community guidelines.`,
+          muted: true,
+          mutedUntil: sanction.muted_until,
+        });
+      }
+    }
 
     const thread = getDb().prepare(`
       SELECT * FROM message_threads WHERE id = ? AND (participant_a = ? OR participant_b = ?) AND status = 'active'
@@ -1002,18 +1156,116 @@ router.post('/threads/:id/messages', requireAuth, async (req: Request, res: Resp
       return res.status(400).json({ success: false, error: 'Message body is required (1-5000 chars)' });
     }
 
+    // ─── Step 2: Run moderation scan ──────────────────────────────────────
+    const messageBody = parsed.data.body;
+    const modResult = moderateServerSide(messageBody);
+
+    // ─── Step 3: Handle blocked violations ────────────────────────────────
+    if (modResult.blocked) {
+      // Get current violation count and determine action
+      const violationCount = (sanction?.violation_count ?? 0) + 1;
+      const action = determineAction(violationCount, modResult.severity);
+
+      // Log the violation
+      addViolation(
+        userId!,
+        modResult.violationType || 'unknown',
+        modResult.severity,
+        null,  // no message ID since we're blocking it
+        req.params.id,
+        JSON.stringify(modResult.matchedPatterns),
+        action,
+      );
+
+      // Apply the sanction
+      const sanctionParams = actionToSanctionParams(action as SanctionAction);
+      upsertUserSanction(
+        userId!,
+        sanctionParams.status,
+        sanctionParams.mutedUntil,
+        sanctionParams.suspendedUntil,
+        violationCount,
+      );
+
+      logger.warn('Message blocked by content moderation', {
+        userId,
+        threadId: req.params.id,
+        violationType: modResult.violationType,
+        severity: modResult.severity,
+        patterns: modResult.matchedPatterns,
+        action,
+        violationCount,
+      });
+
+      // Return error with enforcement details
+      const statusParams = sanctionParams;
+      return res.status(400).json({
+        success: false,
+        error: `Message violates community guidelines (${modResult.violationType}). ${
+          action === 'mute_24h' ? 'You have been muted for 24 hours.' :
+          action === 'suspend_7d' ? 'Your account has been suspended for 7 days.' :
+          action === 'permanent_ban' ? 'Your account has been permanently suspended.' :
+          'Please review our community guidelines.'
+        }`,
+        moderation: {
+          blocked: true,
+          reason: modResult.reason,
+          violationType: modResult.violationType,
+          severity: modResult.severity,
+          action,
+        },
+        sanction: statusParams.status !== 'active' ? statusParams : undefined,
+      });
+    }
+
+    // ─── Step 4: Handle filtered (warning-level) violations ────────────────
+    let finalBody = messageBody;
+    let shouldLog = false;
+
+    if (!modResult.clean) {
+      // Message is filtered but allowed
+      finalBody = modResult.filteredText;
+
+      // Log warning-level violation
+      const violationCount = (sanction?.violation_count ?? 0) + 1;
+      addViolation(
+        userId!,
+        modResult.violationType || 'unknown',
+        modResult.severity,
+        null,
+        req.params.id,
+        JSON.stringify(modResult.matchedPatterns),
+        'warning',
+      );
+
+      shouldLog = true;
+      logger.info('Message filtered by content moderation', {
+        userId,
+        threadId: req.params.id,
+        violationType: modResult.violationType,
+        patterns: modResult.matchedPatterns,
+      });
+    }
+
+    // ─── Step 5: Save message ────────────────────────────────────────────
     const msgId = uuid();
     const now = Date.now();
 
     getDb().prepare('INSERT INTO messages (id, thread_id, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(msgId, req.params.id, userId, parsed.data.body, now);
+      .run(msgId, req.params.id, userId, finalBody, now);
 
     getDb().prepare('UPDATE message_threads SET updated_at = ? WHERE id = ?')
       .run(now, req.params.id);
 
     res.status(201).json({
       success: true,
-      data: { messageId: msgId, threadId: req.params.id, createdAt: now },
+      data: {
+        messageId: msgId,
+        threadId: req.params.id,
+        createdAt: now,
+        filtered: !modResult.clean,
+        filterReason: !modResult.clean ? modResult.reason : undefined,
+      },
     });
   } catch (err: any) {
     logger.error('Message send error', { error: err.message });
@@ -2833,6 +3085,194 @@ router.get('/agent/activity', async (_req: Request, res: Response) => {
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── ADMIN: MODERATION DASHBOARD ──────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /v1/marketplace/admin/violations — List all user violations (admin only)
+ */
+router.get('/admin/violations', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    // Check admin
+    const user = getDb().prepare('SELECT role FROM users WHERE id = ?').get(userId) as any;
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
+    const violations = getAllViolations(limit);
+
+    // Enrich with user details
+    const enriched = violations.map((v: any) => {
+      const userInfo = getDb().prepare('SELECT name, email, tier FROM users WHERE id = ?').get(v.user_id) as any;
+      return {
+        ...v,
+        userName: userInfo?.name || 'Unknown',
+        userEmail: userInfo?.email || 'Unknown',
+        userTier: userInfo?.tier || 'standard',
+        details: v.details ? JSON.parse(v.details) : [],
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        total: enriched.length,
+        violations: enriched,
+      },
+    });
+  } catch (err: any) {
+    logger.error('Admin violations list error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch violations' });
+  }
+});
+
+/**
+ * GET /v1/marketplace/admin/sanctions — List all active sanctions (admin only)
+ */
+router.get('/admin/sanctions', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user?.sub;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    // Check admin
+    const user = getDb().prepare('SELECT role FROM users WHERE id = ?').get(userId) as any;
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
+    const sanctions = getAllSanctions(limit);
+
+    // Format sanctions with human-readable expiry times
+    const formatted = sanctions.map((s: any) => ({
+      ...s,
+      statusDisplay: formatSanctionStatus(
+        s.status,
+        s.status === 'muted' ? s.muted_until : s.status === 'suspended' ? s.suspended_until : undefined,
+      ),
+      mutedUntilFormatted: s.muted_until ? new Date(s.muted_until).toISOString() : null,
+      suspendedUntilFormatted: s.suspended_until ? new Date(s.suspended_until).toISOString() : null,
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        total: formatted.length,
+        sanctions: formatted,
+      },
+    });
+  } catch (err: any) {
+    logger.error('Admin sanctions list error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch sanctions' });
+  }
+});
+
+/**
+ * POST /v1/marketplace/admin/sanction — Manually apply a sanction (admin only)
+ * Body: { userId: string, action: 'warning' | 'mute_24h' | 'suspend_7d' | 'permanent_ban' }
+ */
+router.post('/admin/sanction', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const adminId = authReq.user?.sub;
+    if (!adminId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    // Check admin
+    const admin = getDb().prepare('SELECT role FROM users WHERE id = ?').get(adminId) as any;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+
+    const { userId, action } = req.body;
+    if (!userId || !action || !['warning', 'mute_24h', 'suspend_7d', 'permanent_ban'].includes(action)) {
+      return res.status(400).json({ success: false, error: 'userId and action required' });
+    }
+
+    // Apply sanction
+    const sanctionParams = actionToSanctionParams(action as SanctionAction);
+    upsertUserSanction(
+      userId,
+      sanctionParams.status,
+      sanctionParams.mutedUntil,
+      sanctionParams.suspendedUntil,
+      (getUserSanction(userId)?.violation_count ?? 0) + 1,
+    );
+
+    // Log this action
+    logger.warn('Admin sanction applied', {
+      adminId,
+      targetUserId: userId,
+      action,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        message: `Sanction applied: ${action}`,
+        status: sanctionParams.status,
+      },
+    });
+  } catch (err: any) {
+    logger.error('Admin sanction error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to apply sanction' });
+  }
+});
+
+/**
+ * POST /v1/marketplace/admin/unsanction — Lift/clear a user's sanction (admin only)
+ * Body: { userId: string }
+ */
+router.post('/admin/unsanction', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const adminId = authReq.user?.sub;
+    if (!adminId) return res.status(401).json({ success: false, error: 'Not authenticated' });
+
+    // Check admin
+    const admin = getDb().prepare('SELECT role FROM users WHERE id = ?').get(adminId) as any;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+
+    const { userId } = req.body;
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId required' });
+    }
+
+    // Lift sanction (set status back to active, clear mutes/suspensions)
+    const currentSanction = getUserSanction(userId);
+    if (currentSanction) {
+      upsertUserSanction(
+        userId,
+        'active',
+        null,
+        null,
+        currentSanction.violation_count,
+      );
+    }
+
+    logger.warn('Admin sanction lifted', {
+      adminId,
+      targetUserId: userId,
+    });
+
+    res.json({
+      success: true,
+      data: { message: 'Sanction cleared. User is now active.' },
+    });
+  } catch (err: any) {
+    logger.error('Admin unsanction error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to lift sanction' });
   }
 });
 

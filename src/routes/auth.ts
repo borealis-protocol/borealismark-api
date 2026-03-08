@@ -24,6 +24,7 @@ import {
   getValidPasswordResetToken,
   markPasswordResetTokenUsed,
   updateUserPassword,
+  getUserSanction,
 } from '../db/database';
 import { logger } from '../middleware/logger';
 import { authLimiter, passwordResetLimiter } from '../middleware/rateLimiter';
@@ -216,12 +217,41 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
       return;
     }
 
+    // ─── Check if user is banned/suspended ────────────────────────────────
+    const sanction = getUserSanction(user.id);
+    if (sanction) {
+      const now = Date.now();
+
+      if (sanction.status === 'banned') {
+        logger.warn('Login attempt by banned user', { userId: user.id, email });
+        return res.status(403).json({
+          success: false,
+          error: 'Your account has been permanently suspended for policy violations.',
+          banned: true,
+        });
+      }
+
+      if (sanction.status === 'suspended' && sanction.suspended_until && sanction.suspended_until > now) {
+        const date = new Date(sanction.suspended_until).toLocaleString();
+        logger.warn('Login attempt by suspended user', { userId: user.id, email, suspendedUntil: sanction.suspended_until });
+        return res.status(403).json({
+          success: false,
+          error: `Your account is suspended until ${date} for policy violations.`,
+          suspended: true,
+          suspendedUntil: sanction.suspended_until,
+        });
+      }
+    }
+
     // Update last login
     updateUserLogin(user.id);
 
     const token = signToken(user.id, user.email, user.tier, user.role);
 
     logger.info('User logged in', { userId: user.id, email, role: user.role });
+
+    // Include mute status in response if applicable
+    const muted = sanction?.status === 'muted' && sanction.muted_until && sanction.muted_until > Date.now();
 
     res.json({
       success: true,
@@ -236,6 +266,10 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
           createdAt: user.createdAt,
           lastLoginAt: Date.now(),
         },
+        ...(muted && {
+          muted: true,
+          mutedUntil: sanction?.muted_until,
+        }),
       },
     });
   } catch (err: any) {

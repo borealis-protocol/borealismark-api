@@ -20,7 +20,8 @@ import usageRouter from './routes/usage';
 import docsRouter from './routes/docs';
 import imageProxyRouter from './routes/imageProxy';
 import { cleanupExpiredInvoices } from './hedera/usdc';
-import { getExpiredUsdcSubscriptions, updateUserTier } from './db/database';
+import { getExpiredUsdcSubscriptions, updateUserTier, getExpiredSanctions, upsertUserSanction, getDb } from './db/database';
+import { moderateServerSide, determineAction, actionToSanctionParams } from './middleware/messageModeration';
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
@@ -206,6 +207,103 @@ setInterval(() => {
     logger.error('Failed to process expired subscriptions', { error: err.message });
   }
 }, 60 * 60 * 1000); // hourly
+
+// Periodic AI moderation scan — runs every 30 minutes
+setInterval(async () => {
+  try {
+    logger.info('Running periodic message moderation scan...');
+
+    const db = getDb();
+    const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
+
+    // 1. Scan recent messages (last 30 min) for violations
+    const recentMessages = db.prepare(`
+      SELECT m.id, m.sender_id, m.body, m.thread_id, u.name as sender_name
+      FROM messages m
+      JOIN users u ON m.sender_id = u.id
+      WHERE m.created_at > ?
+    `).all(thirtyMinutesAgo) as any[];
+
+    let scanned = 0;
+    let violations = 0;
+
+    for (const msg of recentMessages) {
+      scanned++;
+      const result = moderateServerSide(msg.body);
+
+      if (!result.clean) {
+        violations++;
+        // Get current violation count
+        const currentViolationCount = db.prepare(
+          'SELECT violation_count FROM user_sanctions WHERE user_id = ?'
+        ).get(msg.sender_id) as { violation_count: number } | undefined;
+        const violationCount = (currentViolationCount?.violation_count ?? 0) + 1;
+
+        const action = determineAction(violationCount, result.severity);
+        const sanctionParams = actionToSanctionParams(action as SanctionAction);
+
+        // Log violation
+        db.prepare(`
+          INSERT INTO user_violations (id, user_id, type, severity, message_id, thread_id, details, action_taken, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          require('crypto').randomUUID(),
+          msg.sender_id,
+          result.violationType || 'unknown',
+          result.severity,
+          msg.id,
+          msg.thread_id,
+          JSON.stringify(result.matchedPatterns),
+          action,
+          Date.now(),
+        );
+
+        // Apply sanction
+        upsertUserSanction(
+          msg.sender_id,
+          sanctionParams.status,
+          sanctionParams.mutedUntil,
+          sanctionParams.suspendedUntil,
+          violationCount,
+        );
+
+        // Optionally censor the message in-place if blocked
+        if (result.blocked) {
+          db.prepare('UPDATE messages SET body = ? WHERE id = ?')
+            .run('[Message removed for policy violation]', msg.id);
+        }
+
+        logger.info('Auto-moderation violation detected', {
+          userId: msg.sender_id,
+          messageId: msg.id,
+          type: result.violationType,
+          severity: result.severity,
+          action,
+        });
+      }
+    }
+
+    // 2. Auto-unblock expired sanctions
+    const expiredSanctions = getExpiredSanctions();
+    for (const sanction of expiredSanctions) {
+      const now = Date.now();
+
+      if (sanction.status === 'muted' && sanction.muted_until && sanction.muted_until < now) {
+        upsertUserSanction(sanction.user_id, 'active', null, null, sanction.violation_count);
+        logger.info('Auto-unmuted user', { userId: sanction.user_id });
+      }
+
+      if (sanction.status === 'suspended' && sanction.suspended_until && sanction.suspended_until < now) {
+        upsertUserSanction(sanction.user_id, 'active', null, null, sanction.violation_count);
+        logger.info('Auto-unsuspended user', { userId: sanction.user_id });
+      }
+    }
+
+    logger.info('Moderation scan complete', { scanned, violations, autoClearedCount: expiredSanctions.length });
+  } catch (err: any) {
+    logger.error('Moderation scan error', { error: err.message });
+  }
+}, 30 * 60 * 1000); // Every 30 minutes
 
 app.listen(PORT, () => {
   logger.info('BorealisMark Protocol API started', {

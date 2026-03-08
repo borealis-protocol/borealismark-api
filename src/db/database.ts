@@ -704,6 +704,38 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_agent_tasks_listing ON agent_tasks(listing_id);
     CREATE INDEX IF NOT EXISTS idx_agent_tasks_user ON agent_tasks(user_id);
     CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status);
+
+    -- ── User Violations & Moderation ─────────────────────────────────────────
+    -- Track policy violations for progressive enforcement
+    CREATE TABLE IF NOT EXISTS user_violations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      type TEXT NOT NULL,           -- 'profanity' | 'off_platform' | 'spam' | 'harassment' | 'scam' | 'slurs'
+      severity TEXT NOT NULL,       -- 'warning' | 'minor' | 'major' | 'critical'
+      message_id TEXT,              -- reference to the offending message
+      thread_id TEXT,               -- reference to the thread
+      details TEXT,                 -- JSON with matched words/patterns
+      action_taken TEXT,            -- 'warning' | 'mute_24h' | 'suspend_7d' | 'permanent_ban'
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_violations_user ON user_violations(user_id);
+    CREATE INDEX IF NOT EXISTS idx_violations_created ON user_violations(created_at);
+
+    -- User sanction status and enforcement
+    CREATE TABLE IF NOT EXISTS user_sanctions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'active', -- 'active' | 'muted' | 'suspended' | 'banned'
+      muted_until INTEGER,                   -- epoch ms when mute expires
+      suspended_until INTEGER,               -- epoch ms when suspension expires
+      violation_count INTEGER DEFAULT 0,
+      last_violation_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sanctions_user ON user_sanctions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sanctions_status ON user_sanctions(status);
   `);
 
   // Migrate: add CAD pricing + shipping columns to marketplace_listings
@@ -2370,4 +2402,136 @@ export function setCachedExchangeRate(from: string, to: string, rate: number, so
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `)
     .run(uuidv4(), from, to, rate, source, now, now + ttlMs);
+}
+
+// ─── User Violations & Moderation ─────────────────────────────────────────
+
+/**
+ * Get user's current sanction status (or null if no sanction exists).
+ */
+export function getUserSanction(userId: string): Record<string, any> | null {
+  return getDb()
+    .prepare('SELECT * FROM user_sanctions WHERE user_id = ?')
+    .get(userId) as Record<string, any> | undefined ?? null;
+}
+
+/**
+ * Create or update a user's sanction record.
+ */
+export function upsertUserSanction(
+  userId: string,
+  status: string,
+  mutedUntil: number | null,
+  suspendedUntil: number | null,
+  violationCount: number,
+): void {
+  const existing = getUserSanction(userId);
+  const now = Date.now();
+
+  if (existing) {
+    getDb()
+      .prepare(`
+        UPDATE user_sanctions
+        SET status = ?, muted_until = ?, suspended_until = ?, violation_count = ?, updated_at = ?
+        WHERE user_id = ?
+      `)
+      .run(status, mutedUntil, suspendedUntil, violationCount, now, userId);
+  } else {
+    getDb()
+      .prepare(`
+        INSERT INTO user_sanctions (id, user_id, status, muted_until, suspended_until, violation_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(uuidv4(), userId, status, mutedUntil, suspendedUntil, violationCount, now);
+  }
+}
+
+/**
+ * Log a policy violation for a user.
+ */
+export function addViolation(
+  userId: string,
+  type: string,
+  severity: string,
+  messageId: string | null,
+  threadId: string | null,
+  details: string,
+  actionTaken: string,
+): void {
+  getDb()
+    .prepare(`
+      INSERT INTO user_violations (id, user_id, type, severity, message_id, thread_id, details, action_taken, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(
+      uuidv4(),
+      userId,
+      type,
+      severity,
+      messageId,
+      threadId,
+      details,
+      actionTaken,
+      Date.now(),
+    );
+
+  // Update violation count and last_violation_at
+  const count = getViolationCount(userId);
+  const sanction = getUserSanction(userId);
+  if (sanction) {
+    getDb()
+      .prepare('UPDATE user_sanctions SET violation_count = ?, last_violation_at = ? WHERE user_id = ?')
+      .run(count, Date.now(), userId);
+  }
+}
+
+/**
+ * Get the total violation count for a user.
+ */
+export function getViolationCount(userId: string): number {
+  const result = getDb()
+    .prepare('SELECT COUNT(*) as cnt FROM user_violations WHERE user_id = ?')
+    .get(userId) as { cnt: number } | undefined;
+  return result?.cnt ?? 0;
+}
+
+/**
+ * Get all violations for a user (for review/audit).
+ */
+export function getUserViolations(userId: string, limit: number = 100): Record<string, any>[] {
+  return getDb()
+    .prepare('SELECT * FROM user_violations WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
+    .all(userId, limit) as Record<string, any>[];
+}
+
+/**
+ * Get all violations across the system (admin only).
+ */
+export function getAllViolations(limit: number = 1000): Record<string, any>[] {
+  return getDb()
+    .prepare('SELECT * FROM user_violations ORDER BY created_at DESC LIMIT ?')
+    .all(limit) as Record<string, any>[];
+}
+
+/**
+ * Get all active sanctions (admin view).
+ */
+export function getAllSanctions(limit: number = 1000): Record<string, any>[] {
+  return getDb()
+    .prepare('SELECT s.*, u.email, u.name FROM user_sanctions s JOIN users u ON s.user_id = u.id ORDER BY s.updated_at DESC LIMIT ?')
+    .all(limit) as Record<string, any>[];
+}
+
+/**
+ * Get users whose mute/suspension has expired.
+ * Used for auto-unblocking in periodic cleanup.
+ */
+export function getExpiredSanctions(): Record<string, any>[] {
+  const now = Date.now();
+  return getDb()
+    .prepare(`
+      SELECT * FROM user_sanctions
+      WHERE (status = 'muted' AND muted_until < ?) OR (status = 'suspended' AND suspended_until < ?)
+    `)
+    .all(now, now) as Record<string, any>[];
 }
