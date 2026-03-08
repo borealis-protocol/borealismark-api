@@ -900,9 +900,9 @@ router.get('/threads', requireAuth, async (req: Request, res: Response) => {
       LIMIT 50
     `).all(userId, userId, userId, userId) as any[];
 
-    // Get other party names
+    // Get other party names and tier
     const result = threads.map(t => {
-      const otherUser = getDb().prepare('SELECT name, email FROM users WHERE id = ?').get(t.other_party) as any;
+      const otherUser = getDb().prepare('SELECT name, email, tier FROM users WHERE id = ?').get(t.other_party) as any;
       return {
         threadId: t.id,
         listingId: t.listing_id,
@@ -910,6 +910,7 @@ router.get('/threads', requireAuth, async (req: Request, res: Response) => {
         subject: t.subject,
         otherPartyId: t.other_party,
         otherPartyName: otherUser?.name ?? 'Unknown',
+        otherPartyTier: otherUser?.tier ?? 'unverified',
         unreadCount: t.unread_count,
         lastMessage: t.last_message,
         updatedAt: t.updated_at,
