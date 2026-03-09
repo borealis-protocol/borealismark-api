@@ -24,31 +24,36 @@ export const AGENT_PLANS: Record<string, StripePlan> = {
     name: 'BorealisMark Pro',
     productId: process.env.STRIPE_PRO_PRODUCT_ID ?? 'prod_U66ZErtSnBzoBL',
     priceId: process.env.STRIPE_PRO_PRICE_ID ?? 'price_1T7uLvJ5qkaENvhUnLYNkUrI',
-    amount: 9999,
+    amount: 14900,
     currency: 'usd',
     interval: 'year',
     tier: 'pro',
     features: [
+      'Up to 10 bot deployments',
       '3x AP multiplier',
-      'Priority support',
+      'Priority audit queue',
       'Enhanced analytics',
-      'Custom badge styling',
+      'Pro badge on profile',
+      'Email support',
+      'Free first year for early adopters',
     ],
   },
   elite: {
     name: 'BorealisMark Elite',
     productId: process.env.STRIPE_ELITE_PRODUCT_ID ?? 'prod_U66ZiaE5IPDZuf',
     priceId: process.env.STRIPE_ELITE_PRICE_ID ?? 'price_1T7uLsJ5qkaENvhU1X2hN83W',
-    amount: 14999,
+    amount: 34900,
     currency: 'usd',
     interval: 'year',
     tier: 'elite',
     features: [
+      'Up to 50 bot deployments',
       '5x AP multiplier',
+      'Dedicated audit liaison',
+      '1.5% transaction fee (vs 2.5%)',
       'Full analytics suite',
-      'Priority support',
-      'Advanced features',
-      'Custom integrations',
+      'Priority incident response',
+      'Custom SLA options',
     ],
   },
 };
@@ -60,30 +65,30 @@ export const API_TIERS: Record<string, StripePlan> = {
     name: 'API Starter (Verify)',
     productId: process.env.STRIPE_STARTER_PRODUCT_ID ?? 'prod_U66ZJLWLqbMeyt',
     priceId: process.env.STRIPE_STARTER_PRICE_ID ?? 'price_1T7uLtJ5qkaENvhUYrD3Ss5e',
-    amount: 4900,
+    amount: 2900,
     currency: 'usd',
     interval: 'month',
     tier: 'starter',
     features: [
       'Real-time agent verification',
-      '1,000 API calls/month',
+      '25,000 API calls/month',
       'Level 1 data access',
-      'Basic webhooks',
+      '5 webhooks',
     ],
   },
   business: {
     name: 'API Business (Analyze)',
     productId: process.env.STRIPE_BUSINESS_PRODUCT_ID ?? 'prod_U66YidiqsewMKf',
     priceId: process.env.STRIPE_BUSINESS_PRICE_ID ?? 'price_1T7uLrJ5qkaENvhUQ1GOXfhH',
-    amount: 19900,
+    amount: 14900,
     currency: 'usd',
     interval: 'month',
     tier: 'business',
     features: [
       'Historical trends & domain analytics',
-      '10,000 API calls/month',
+      '100,000 API calls/month',
       'Level 2 data access',
-      'Advanced webhooks',
+      '25 webhooks',
       'Batch queries',
     ],
   },
@@ -101,6 +106,7 @@ export const API_TIERS: Record<string, StripePlan> = {
       'Level 3 data access',
       'White-label badges',
       'Dedicated support',
+      '1.0% transaction fee',
       'Custom SLA',
     ],
   },
@@ -118,9 +124,9 @@ export function getPlanByProductId(productId: string): StripePlan | undefined {
   return Object.values(ALL_PLANS).find(p => p.productId === productId);
 }
 
-// ─── USDC Pricing (3% discount over Stripe — passes processing fee savings) ─
+// ─── USDC Pricing (5% discount over Stripe — passes processing fee savings + adoption incentive) ─
 
-export const USDC_DISCOUNT_PERCENT = 3;
+export const USDC_DISCOUNT_PERCENT = 5;
 
 export interface UsdcPrice {
   amountUsd: number;
@@ -130,27 +136,27 @@ export interface UsdcPrice {
 
 export const USDC_PRICES: Record<string, UsdcPrice> = {
   pro: {
-    amountUsd: 96.99,          // $99.99 − 3% ≈ $96.99
-    stripePriceCents: 9999,
+    amountUsd: 141.55,         // $149.00 − 5% ≈ $141.55
+    stripePriceCents: 14900,
     discountPercent: USDC_DISCOUNT_PERCENT,
   },
   elite: {
-    amountUsd: 145.49,         // $149.99 − 3% ≈ $145.49
-    stripePriceCents: 14999,
+    amountUsd: 331.55,         // $349.00 − 5% ≈ $331.55
+    stripePriceCents: 34900,
     discountPercent: USDC_DISCOUNT_PERCENT,
   },
   starter: {
-    amountUsd: 47.53,          // $49.00 − 3% ≈ $47.53
-    stripePriceCents: 4900,
+    amountUsd: 27.55,          // $29.00 − 5% ≈ $27.55
+    stripePriceCents: 2900,
     discountPercent: USDC_DISCOUNT_PERCENT,
   },
   business: {
-    amountUsd: 193.03,         // $199.00 − 3% ≈ $193.03
-    stripePriceCents: 19900,
+    amountUsd: 141.55,         // $149.00 − 5% ≈ $141.55
+    stripePriceCents: 14900,
     discountPercent: USDC_DISCOUNT_PERCENT,
   },
   enterprise: {
-    amountUsd: 484.03,         // $499.00 − 3% ≈ $484.03
+    amountUsd: 474.05,         // $499.00 − 5% ≈ $474.05
     stripePriceCents: 49900,
     discountPercent: USDC_DISCOUNT_PERCENT,
   },

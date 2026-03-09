@@ -2093,9 +2093,9 @@ export function seedApiTiers(): void {
   if (existing.count > 0) return; // Already seeded
 
   const tiers = [
-    { id: 'tier_free', name: 'free', displayName: 'Free', monthlyLimit: 100, maxAgents: 1, maxWebhooks: 0, rateLimit: 10, priceCents: 0, stripePriceId: null },
-    { id: 'tier_starter', name: 'starter', displayName: 'Starter', monthlyLimit: 10000, maxAgents: 5, maxWebhooks: 3, rateLimit: 60, priceCents: 4900, stripePriceId: 'price_1T7uLtJ5qkaENvhUYrD3Ss5e' },
-    { id: 'tier_business', name: 'business', displayName: 'Business', monthlyLimit: 100000, maxAgents: 25, maxWebhooks: 10, rateLimit: 200, priceCents: 19900, stripePriceId: 'price_1T7uLrJ5qkaENvhUQ1GOXfhH' },
+    { id: 'tier_free', name: 'free', displayName: 'Free', monthlyLimit: 5000, maxAgents: 3, maxWebhooks: 0, rateLimit: 20, priceCents: 0, stripePriceId: null },
+    { id: 'tier_starter', name: 'starter', displayName: 'Starter', monthlyLimit: 25000, maxAgents: 10, maxWebhooks: 5, rateLimit: 100, priceCents: 2900, stripePriceId: 'price_1T7uLtJ5qkaENvhUYrD3Ss5e' },
+    { id: 'tier_business', name: 'business', displayName: 'Business', monthlyLimit: 100000, maxAgents: 50, maxWebhooks: 25, rateLimit: 300, priceCents: 14900, stripePriceId: 'price_1T7uLrJ5qkaENvhUQ1GOXfhH' },
     { id: 'tier_enterprise', name: 'enterprise', displayName: 'Enterprise', monthlyLimit: 1000000, maxAgents: -1, maxWebhooks: -1, rateLimit: 1000, priceCents: 49900, stripePriceId: 'price_1T7uLuJ5qkaENvhUBvPN4AXr' },
   ];
 

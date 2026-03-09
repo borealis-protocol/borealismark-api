@@ -44,9 +44,9 @@ const router = Router();
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const BOT_LIMITS = {
-  standard: 1,
-  pro: 5,
-  elite: 25,
+  standard: 3,
+  pro: 10,
+  elite: 50,
 };
 
 const TIER_THRESHOLDS: Record<string, number> = {
