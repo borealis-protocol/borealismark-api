@@ -23,6 +23,7 @@ import botsRouter from './routes/bots';
 import supportRouter from './routes/support';
 import analyticsRouter from './routes/analytics';
 import adminRouter from './routes/admin';
+import adminMailRouter from './routes/adminMail';
 import { cleanupExpiredInvoices } from './hedera/usdc';
 import { startAggregationSchedule } from './services/dataStore';
 import { startAnchoringSchedule } from './services/hederaAnchor';
@@ -110,6 +111,7 @@ app.use('/v1/bots',     botsRouter);
 app.use('/v1/support',  supportRouter);
 app.use('/v1/analytics', analyticsRouter);
 app.use('/v1/admin',     adminRouter);
+app.use('/v1/admin/mail', adminMailRouter);
 
 // ─── Static Files (Dashboard) ────────────────────────────────────────────────
 
@@ -162,7 +164,7 @@ app.use((_req, res) => {
     available: [
       '/v1/auth', '/v1/agents', '/v1/staking', '/v1/network', '/v1/marks',
       '/v1/keys', '/v1/webhooks', '/v1/payments', '/v1/terminal', '/v1/marketplace',
-      '/v1/usage', '/v1/docs', '/v1/bots', '/v1/support', '/v1/analytics', '/v1/admin', '/health',
+      '/v1/usage', '/v1/docs', '/v1/bots', '/v1/support', '/v1/analytics', '/v1/admin', '/v1/admin/mail', '/health',
     ],
     timestamp: Date.now(),
   });

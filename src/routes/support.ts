@@ -10,6 +10,7 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { handleSupportChat, processInboundEmail, type InboundEmail } from '../services/aiSupport';
 import { logger } from '../middleware/logger';
+import { storeInboundEmail, storeOutboundEmail } from './adminMail';
 
 // We import the Resend send function to reply to emails
 import { Resend } from 'resend';
@@ -119,6 +120,18 @@ router.post('/email-inbound', async (req: Request, res: Response) => {
       from, subject, messageId,
     });
 
+    // Store inbound email in admin mail center
+    let inboundMailId: string | undefined;
+    try {
+      inboundMailId = storeInboundEmail({
+        from, fromName, subject: subject || '(no subject)',
+        bodyText: body, bodyHtml: htmlBody,
+        messageId, inReplyTo, source: 'support',
+      });
+    } catch (storeErr: any) {
+      logger.error('Failed to store inbound email in admin mail', { error: storeErr.message });
+    }
+
     // Generate AI reply
     const aiReply = await processInboundEmail({
       from, fromName, to, subject, body, htmlBody, messageId, inReplyTo,
@@ -143,6 +156,16 @@ router.post('/email-inbound', async (req: Request, res: Response) => {
         logger.error('Failed to send support reply email', { error: result.error, to: from });
       } else {
         logger.info('Support reply sent', { to: from, subject, emailId: result.data?.id });
+        // Store outbound reply in admin mail center
+        try {
+          storeOutboundEmail({
+            to: from, subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
+            bodyText: aiReply, bodyHtml: emailHtml,
+            resendId: result.data?.id, source: 'aurora-reply',
+          });
+        } catch (storeErr: any) {
+          logger.error('Failed to store outbound email in admin mail', { error: storeErr.message });
+        }
       }
     } else {
       logger.warn('No RESEND_API_KEY — support reply not sent', { to: from, subject });
