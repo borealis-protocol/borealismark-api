@@ -50,10 +50,12 @@ export const TREASURY_ACCOUNT_ID: string = (() => {
 })();
 
 // Mirror node base URL
-const MIRROR_NODE_BASE = process.env.HEDERA_MIRROR_NODE_URL
-  ?? (process.env.HEDERA_NETWORK === 'mainnet'
-    ? 'https://mainnet.mirrornode.hedera.com'
-    : 'https://testnet.mirrornode.hedera.com');
+const MIRROR_NODE_BASE = process.env.HEDERA_MIRROR_NODE_URL ?? (() => {
+  const network = process.env.HEDERA_NETWORK;
+  if (network === 'mainnet') return 'https://mainnet.mirrornode.hedera.com';
+  if (network === 'testnet') return 'https://testnet.mirrornode.hedera.com';
+  throw new Error(`HEDERA_NETWORK must be 'testnet' or 'mainnet', got: ${network}`);
+})();
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -199,10 +201,16 @@ export function updateInvoiceStatus(
  *   GET /api/v1/transactions?account.id={treasury}&transactiontype=CRYPTOTRANSFER&timestamp=gte:{since}
  *
  * We look for a HTS token transfer of USDC to the treasury with the
- * matching memo.
+ * matching memo. Includes exponential backoff retry and indexing lag handling.
+ *
+ * Config:
+ *   - Timeout window: 60 minutes (configurable via timeout parameter)
+ *   - Retry with exponential backoff on Mirror Node API failures
+ *   - Detects indexing lag: retries if no results in first 10 seconds
  */
 export async function verifyUsdcPayment(
   invoiceId: string,
+  timeoutWindowMs: number = 60 * 60 * 1000, // 60 minutes default
 ): Promise<PaymentConfirmation | null> {
   const invoice = getInvoice(invoiceId);
   if (!invoice) {
@@ -221,94 +229,147 @@ export async function verifyUsdcPayment(
     return null;
   }
 
+  // Calculate time window accounting for Mirror Node indexing lag
+  // Only check transactions within the timeout window from invoice creation
   const sinceTimestamp = (invoice.createdAt / 1000).toFixed(9);
+  const untilTimestamp = ((invoice.createdAt + timeoutWindowMs) / 1000).toFixed(9);
+
   const url = `${MIRROR_NODE_BASE}/api/v1/transactions`
     + `?account.id=${invoice.treasuryAccountId}`
     + `&transactiontype=CRYPTOTRANSFER`
     + `&timestamp=gte:${sinceTimestamp}`
+    + `&timestamp=lte:${untilTimestamp}`
     + `&limit=50`
     + `&order=desc`;
 
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      logger.error('Mirror node query failed', {
-        status: response.status,
-        invoiceId,
-      });
-      return null;
-    }
+  // Exponential backoff for retries
+  const maxRetries = 3;
+  let lastError: any = null;
 
-    const data = await response.json() as {
-      transactions: Array<{
-        transaction_id: string;
-        consensus_timestamp: string;
-        memo_base64: string;
-        result: string;
-        token_transfers?: Array<{
-          token_id: string;
-          account: string;
-          amount: number;
-        }>;
-      }>;
-    };
-
-    // Search for a matching transaction
-    for (const tx of data.transactions) {
-      if (tx.result !== 'SUCCESS') continue;
-
-      // Decode memo and check match
-      const decodedMemo = Buffer.from(tx.memo_base64 ?? '', 'base64').toString('utf-8');
-      if (decodedMemo !== invoice.memo) continue;
-
-      // Check for USDC token transfer to treasury
-      const tokenTransfers = tx.token_transfers ?? [];
-      // Use integer comparison to avoid floating-point precision issues
-      // USDC has 6 decimals: "49.000000" → 49_000_000 smallest units
-      const expectedSmallestUnits = BigInt(
-        invoice.amountUsdc.replace('.', '').replace(/^0+/, '') || '0',
-      );
-      const matchingTransfer = tokenTransfers.find(
-        t =>
-          t.token_id === invoice.tokenId &&
-          t.account === invoice.treasuryAccountId &&
-          BigInt(t.amount) >= expectedSmallestUnits,
-      );
-
-      if (matchingTransfer) {
-        // Payment confirmed!
-        updateInvoiceStatus(invoiceId, 'confirmed');
-
-        const confirmation: PaymentConfirmation = {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, { timeout: 10000 });
+      if (!response.ok) {
+        logger.error('Mirror node query failed', {
+          status: response.status,
           invoiceId,
-          transactionId: tx.transaction_id,
-          consensusTimestamp: tx.consensus_timestamp,
-          fromAccount: tokenTransfers.find(
-            t => t.token_id === invoice.tokenId && t.amount < 0,
-          )?.account ?? 'unknown',
-          amount: invoice.amountUsdc,
-          status: 'confirmed',
-        };
-
-        logger.info('USDC payment confirmed', {
-          invoiceId,
-          transactionId: tx.transaction_id,
-          amount: invoice.amountUsdc,
+          attempt,
         });
+        lastError = new Error(`HTTP ${response.status}`);
 
-        return confirmation;
+        // Exponential backoff: wait 2^attempt seconds before retry
+        if (attempt < maxRetries - 1) {
+          const delayMs = Math.pow(2, attempt) * 1000;
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+        continue;
+      }
+
+      const data = await response.json() as {
+        transactions: Array<{
+          transaction_id: string;
+          consensus_timestamp: string;
+          memo_base64: string;
+          result: string;
+          token_transfers?: Array<{
+            token_id: string;
+            account: string;
+            amount: number;
+          }>;
+        }>;
+      };
+
+      // Check for Mirror Node indexing lag: if no results in first 10 seconds, retry
+      const now = Date.now();
+      const timeSinceCreation = now - invoice.createdAt;
+      if (data.transactions.length === 0 && timeSinceCreation < 10000) {
+        logger.info('No transactions found yet (possible indexing lag), retrying...', {
+          invoiceId,
+          timeSinceCreationMs: timeSinceCreation,
+          attempt,
+        });
+        lastError = new Error('Indexing lag detected');
+
+        // Wait before retry
+        if (attempt < maxRetries - 1) {
+          const delayMs = Math.pow(2, attempt) * 1000;
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+        continue;
+      }
+
+      // Search for a matching transaction
+      for (const tx of data.transactions) {
+        if (tx.result !== 'SUCCESS') continue;
+
+        // Decode memo and check match
+        const decodedMemo = Buffer.from(tx.memo_base64 ?? '', 'base64').toString('utf-8');
+        if (decodedMemo !== invoice.memo) continue;
+
+        // Check for USDC token transfer to treasury
+        const tokenTransfers = tx.token_transfers ?? [];
+        // Use integer comparison to avoid floating-point precision issues
+        // USDC has 6 decimals: "49.000000" → 49_000_000 smallest units
+        const expectedSmallestUnits = BigInt(
+          invoice.amountUsdc.replace('.', '').replace(/^0+/, '') || '0',
+        );
+        const matchingTransfer = tokenTransfers.find(
+          t =>
+            t.token_id === invoice.tokenId &&
+            t.account === invoice.treasuryAccountId &&
+            BigInt(t.amount) >= expectedSmallestUnits,
+        );
+
+        if (matchingTransfer) {
+          // Payment confirmed!
+          updateInvoiceStatus(invoiceId, 'confirmed');
+
+          const confirmation: PaymentConfirmation = {
+            invoiceId,
+            transactionId: tx.transaction_id,
+            consensusTimestamp: tx.consensus_timestamp,
+            fromAccount: tokenTransfers.find(
+              t => t.token_id === invoice.tokenId && t.amount < 0,
+            )?.account ?? 'unknown',
+            amount: invoice.amountUsdc,
+            status: 'confirmed',
+          };
+
+          logger.info('USDC payment confirmed', {
+            invoiceId,
+            transactionId: tx.transaction_id,
+            amount: invoice.amountUsdc,
+            retriesNeeded: attempt,
+          });
+
+          return confirmation;
+        }
+      }
+
+      // No matching transaction found this attempt, but query succeeded
+      return null;
+    } catch (err: any) {
+      lastError = err;
+      logger.warn('Mirror node verification error', {
+        invoiceId,
+        error: err.message,
+        attempt,
+      });
+
+      // Exponential backoff before retry
+      if (attempt < maxRetries - 1) {
+        const delayMs = Math.pow(2, attempt) * 1000;
+        await new Promise(resolve => setTimeout(resolve, delayMs));
       }
     }
-
-    // No matching transaction found yet
-    return null;
-  } catch (err: any) {
-    logger.error('Mirror node verification error', {
-      invoiceId,
-      error: err.message,
-    });
-    return null;
   }
+
+  logger.error('Mirror node verification failed after retries', {
+    invoiceId,
+    lastError: lastError?.message,
+    maxRetries,
+  });
+  return null;
 }
 
 // ─── HCS Payment Receipt Anchoring ──────────────────────────────────────────
@@ -322,10 +383,15 @@ export async function anchorPaymentReceiptOnHCS(
   planId: string,
 ): Promise<{ topicId: string; sequenceNumber: number } | null> {
   try {
+    const networkEnv = process.env.HEDERA_NETWORK;
+    if (!networkEnv || !['testnet', 'mainnet'].includes(networkEnv)) {
+      throw new Error(`HEDERA_NETWORK must be 'testnet' or 'mainnet', got: ${networkEnv}`);
+    }
+
     const config: HCSConfig = {
       accountId: process.env.HEDERA_ACCOUNT_ID ?? '',
       privateKey: process.env.HEDERA_PRIVATE_KEY ?? '',
-      network: (process.env.HEDERA_NETWORK as 'testnet' | 'mainnet') ?? 'testnet',
+      network: networkEnv as 'testnet' | 'mainnet',
     };
 
     if (!config.accountId || !config.privateKey) {

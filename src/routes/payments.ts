@@ -49,6 +49,10 @@ import { events as eventBus } from '../services/eventBus';
 
 const router = Router();
 
+// ─── Webhook Idempotency ─────────────────────────────────────────────────────
+// Track processed Stripe webhook event IDs to prevent double-processing
+const processedWebhookIds = new Set<string>();
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** Calculate subscription expiry from now based on plan interval */
@@ -702,6 +706,12 @@ router.post('/webhook', async (req: Request, res: Response) => {
   try {
     const event = constructWebhookEvent(req.body, sig);
 
+    // Idempotency check: skip if this event has already been processed
+    if (processedWebhookIds.has(event.id)) {
+      logger.info('Webhook already processed', { type: event.type, id: event.id });
+      return res.json({ received: true });
+    }
+
     logger.info('Stripe webhook received', { type: event.type, id: event.id });
 
     switch (event.type) {
@@ -812,6 +822,9 @@ router.post('/webhook', async (req: Request, res: Response) => {
       default:
         logger.info('Unhandled webhook event', { type: event.type });
     }
+
+    // Mark this webhook as processed
+    processedWebhookIds.add(event.id);
 
     res.json({ received: true });
   } catch (err: any) {

@@ -106,6 +106,17 @@ router.post('/slash', requireApiKey, requireScope('audit'), slashLimiter, valida
   const authReq = req as AuthenticatedRequest;
   const { agentId, violationType, amountSlashed, claimantAddress } = req.body as z.infer<typeof SlashSchema>;
 
+  // Validate claimant_address format (Hedera account: 0.0.XXXXX)
+  const hederaAccountRegex = /^0\.0\.\d+$/;
+  if (!hederaAccountRegex.test(claimantAddress)) {
+    res.status(400).json({
+      success: false,
+      error: `Invalid claimant address format: "${claimantAddress}" should be "0.0.XXXXX" (shard.realm.account)`,
+      timestamp: Date.now(),
+    });
+    return;
+  }
+
   const stake = getActiveStake(agentId);
   if (!stake) {
     res.status(404).json({
@@ -126,6 +137,21 @@ router.post('/slash', requireApiKey, requireScope('audit'), slashLimiter, valida
     return;
   }
 
+  // Verify stake has sufficient balance remaining after slash
+  const remainingBalance = stakeAmount - amountSlashed;
+  if (remainingBalance < 0) {
+    res.status(400).json({
+      success: false,
+      error: `Slash amount exceeds available balance. ${stakeAmount} BMT staked, cannot slash ${amountSlashed} BMT`,
+      timestamp: Date.now(),
+    });
+    return;
+  }
+
+  // Cooldown: prevent multiple slashes within 24 hours on same agent
+  // TODO: Query slash_events table for agent_id with executed_at > now - 24h
+  // For now, this is documented but requires database query implementation
+
   // Enforce severity-based slash caps to prevent excessive penalties
   const maxSlashRatio = SEVERITY_CAPS[violationType] ?? 0.50;
   const maxSlashAmount = stakeAmount * maxSlashRatio;
@@ -137,6 +163,11 @@ router.post('/slash', requireApiKey, requireScope('audit'), slashLimiter, valida
     });
     return;
   }
+
+  // Track total slashed: don't allow total slashed to exceed original stake amount
+  // This prevents infinite slashing and ensures proportional penalties
+  // TODO: Query slash_events table for agent_id and sum amount_slashed
+  // Validate: sum(amount_slashed) + amountSlashed <= stakeAmount
 
   const slashId = uuidv4();
   let hcsTxId: string | undefined;
@@ -158,10 +189,15 @@ router.post('/slash', requireApiKey, requireScope('audit'), slashLimiter, valida
         executedAt: Date.now(),
       };
 
+      const networkEnv = process.env.HEDERA_NETWORK;
+      if (!networkEnv || !['testnet', 'mainnet'].includes(networkEnv)) {
+        throw new Error(`HEDERA_NETWORK must be 'testnet' or 'mainnet', got: ${networkEnv}`);
+      }
+
       const hederaClient = await createHederaClient({
         accountId,
         privateKey,
-        network: (process.env.HEDERA_NETWORK as 'testnet' | 'mainnet') ?? 'testnet',
+        network: networkEnv as 'testnet' | 'mainnet',
       });
 
       const hcsResult = await submitSlashEventToHCS(hederaClient, topicId, slashEvent);

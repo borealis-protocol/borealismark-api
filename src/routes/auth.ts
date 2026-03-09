@@ -40,12 +40,15 @@ const router = Router();
 
 const JWT_SECRET = (() => {
   const secret = process.env.JWT_SECRET;
-  if (!secret && process.env.NODE_ENV === 'production') {
-    logger.error('FATAL: JWT_SECRET must be set in production');
-    process.exit(1);
-  }
-  if (!secret || secret === 'borealismark-jwt-dev-secret-change-me') {
-    logger.warn('Using default JWT secret — set JWT_SECRET env var for production');
+  if (process.env.NODE_ENV === 'production') {
+    if (!secret || secret === 'borealismark-jwt-dev-secret-change-me') {
+      logger.error('FATAL: JWT_SECRET must be set to a secure value in production');
+      process.exit(1);
+    }
+  } else {
+    if (!secret) {
+      logger.warn('Using default JWT secret — set JWT_SECRET env var for production');
+    }
   }
   return secret ?? 'borealismark-jwt-dev-secret-change-me';
 })();

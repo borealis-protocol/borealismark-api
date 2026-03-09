@@ -17,7 +17,7 @@
 
 import { createHash } from 'crypto';
 import { logger } from '../middleware/logger';
-import { getUnanchoredEvents, markEventsAnchored } from '../db/database';
+import { getUnanchoredEvents, markEventsAnchored, incrementEventRetryCount, getFailedEventsForRetry } from '../db/database';
 import { emit, EventTypes } from './eventBus';
 
 // Lazy-load Hedera SDK to avoid blocking server startup (SDK takes ~20s to load)
@@ -128,10 +128,15 @@ export async function anchorEventBatch(): Promise<{
       return { anchored: events.length, merkleRoot, hcsTxId: null };
     }
 
+    const networkEnv = process.env.HEDERA_NETWORK;
+    if (!networkEnv || !['testnet', 'mainnet'].includes(networkEnv)) {
+      throw new Error(`HEDERA_NETWORK must be 'testnet' or 'mainnet', got: ${networkEnv}`);
+    }
+
     const config = {
       accountId,
       privateKey,
-      network: (process.env.HEDERA_NETWORK ?? 'mainnet') as 'testnet' | 'mainnet',
+      network: networkEnv as 'testnet' | 'mainnet',
     };
 
     const client = await _createHederaClient(config);
@@ -189,12 +194,111 @@ export async function anchorEventBatch(): Promise<{
       merkleRoot,
     });
 
-    // Fallback: mark as locally anchored so events don't pile up
-    const fallbackTxId = `failed:${Date.now()}:${merkleRoot.slice(0, 16)}`;
-    markEventsAnchored(eventIds, fallbackTxId);
+    // Increment retry count for each event so we can track retry attempts
+    // Events will be picked up again by retryFailedAnchoring() when backoff delay has passed
+    for (const eventId of eventIds) {
+      incrementEventRetryCount(eventId);
+    }
 
-    return { anchored: events.length, merkleRoot, hcsTxId: null };
+    return { anchored: 0, merkleRoot, hcsTxId: null };
   }
+}
+
+// ─── HCS Retry Queue ────────────────────────────────────────────────────
+
+const MAX_RETRY_ATTEMPTS = 5;
+let retryInterval: NodeJS.Timeout | null = null;
+
+/**
+ * Retry failed HCS submissions with exponential backoff.
+ * Delay = min(2^retry_count * 1000, 60000) ms
+ * Max 5 retry attempts per event.
+ */
+export async function retryFailedAnchoring(): Promise<{
+  retried: number;
+  succeeded: number;
+  stillFailed: number;
+}> {
+  const failedEvents = getFailedEventsForRetry(MAX_RETRY_ATTEMPTS);
+  if (failedEvents.length === 0) {
+    return { retried: 0, succeeded: 0, stillFailed: 0 };
+  }
+
+  let succeeded = 0;
+  let stillFailed = 0;
+
+  const merkleRoot = computeMerkleRoot(failedEvents);
+  const eventIds = failedEvents.map(e => e.id);
+
+  // Check if Hedera is configured
+  const accountId = process.env.HEDERA_ACCOUNT_ID;
+  const privateKey = process.env.HEDERA_PRIVATE_KEY;
+  const dataTopicId = process.env.HEDERA_DATA_TOPIC_ID ?? process.env.HEDERA_AUDIT_TOPIC_ID;
+
+  if (!accountId || !privateKey || !dataTopicId) {
+    logger.warn('HCS retry skipped — Hedera not configured', { eventCount: failedEvents.length });
+    return { retried: failedEvents.length, succeeded: 0, stillFailed: failedEvents.length };
+  }
+
+  try {
+    const loaded = await loadHedera();
+    if (!loaded) {
+      logger.warn('Hedera SDK unavailable for retry', { eventCount: failedEvents.length });
+      return { retried: failedEvents.length, succeeded: 0, stillFailed: failedEvents.length };
+    }
+
+    const networkEnv = process.env.HEDERA_NETWORK;
+    if (!networkEnv || !['testnet', 'mainnet'].includes(networkEnv)) {
+      throw new Error(`HEDERA_NETWORK must be 'testnet' or 'mainnet', got: ${networkEnv}`);
+    }
+
+    const config = {
+      accountId,
+      privateKey,
+      network: networkEnv as 'testnet' | 'mainnet',
+    };
+
+    const client = await _createHederaClient(config);
+
+    const message = JSON.stringify({
+      protocol: 'BorealisMark/1.0',
+      type: 'DATA_ANCHOR_RETRY',
+      merkleRoot,
+      eventCount: failedEvents.length,
+      retryAttempt: 1,
+      timestamp: Date.now(),
+    });
+
+    const tx = await new _TopicMessageSubmitTransaction()
+      .setTopicId(_TopicId.fromString(dataTopicId))
+      .setMessage(message)
+      .execute(client);
+
+    const receipt = await tx.getReceipt(client);
+    const hcsTxId = tx.transactionId?.toString() ?? `hcs:${Date.now()}`;
+
+    // Mark all events as anchored
+    markEventsAnchored(eventIds, hcsTxId);
+    succeeded = failedEvents.length;
+
+    logger.info('Retry batch anchored to Hedera', {
+      count: failedEvents.length,
+      merkleRoot,
+      hcsTxId,
+      topicId: dataTopicId,
+    });
+
+    client.close();
+  } catch (err: any) {
+    logger.error('HCS retry batch failed', {
+      error: err.message,
+      eventCount: failedEvents.length,
+      merkleRoot,
+    });
+    stillFailed = failedEvents.length;
+  }
+
+  return { retried: failedEvents.length, succeeded, stillFailed };
 }
 
 // ─── Scheduled Anchoring ────────────────────────────────────────────────────
@@ -216,13 +320,29 @@ export function startAnchoringSchedule(): void {
     }
   }, ANCHOR_INTERVAL_MS);
 
-  logger.info('Hedera anchoring schedule started', { intervalMs: ANCHOR_INTERVAL_MS });
+  // Retry failed submissions every 30 seconds
+  retryInterval = setInterval(async () => {
+    try {
+      const result = await retryFailedAnchoring();
+      if (result.retried > 0) {
+        logger.info('Retry batch processed', result);
+      }
+    } catch (err: any) {
+      logger.error('Retry batch error', { error: err.message });
+    }
+  }, 30 * 1000); // 30 seconds
+
+  logger.info('Hedera anchoring schedule started', { anchorIntervalMs: ANCHOR_INTERVAL_MS, retryIntervalMs: 30000 });
 }
 
 export function stopAnchoringSchedule(): void {
   if (anchorInterval) {
     clearInterval(anchorInterval);
     anchorInterval = null;
+  }
+  if (retryInterval) {
+    clearInterval(retryInterval);
+    retryInterval = null;
   }
   logger.info('Hedera anchoring schedule stopped');
 }

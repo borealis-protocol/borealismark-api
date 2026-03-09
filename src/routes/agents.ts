@@ -22,6 +22,9 @@ import {
   getCertificatesByUserId,
   toggleAgentPublicListing,
   getPublicAgents,
+  createAuditRequest,
+  getAuditRequest,
+  updateAuditRequestStatus,
 } from '../db/database';
 import { runAudit } from '../engine/audit-engine';
 import { createHederaClient, submitCertificateToHCS, createAuditTopic } from '../hedera/hcs';
@@ -73,6 +76,23 @@ const BehaviorSampleSchema = z.object({
   sampleCount: z.number().int().positive(),
   outputVariance: z.number().min(0).max(1),
   deterministicRate: z.number().min(0).max(1),
+});
+
+const AuditRequestSchema = z.object({
+  agentId: z.string().min(1),
+  auditPeriodStart: z.number().int().positive(),
+  auditPeriodEnd: z.number().int().positive(),
+  constraints: z.array(ConstraintCheckSchema).min(1),
+  decisions: z.array(DecisionLogSchema).min(1),
+  behaviorSamples: z.array(BehaviorSampleSchema).min(1),
+});
+
+const AuditAcceptSchema = z.object({
+  signature: z.string().regex(/^[a-f0-9]+$/i, 'Signature must be hex string'),
+});
+
+const AuditRejectSchema = z.object({
+  reason: z.string().max(500).optional(),
 });
 
 const AuditSchema = z.object({
@@ -185,10 +205,15 @@ router.post('/audit', requireApiKey, requireScope('audit'), auditLimiter, valida
 
     if (accountId && privateKey) {
       try {
+        const networkEnv = process.env.HEDERA_NETWORK;
+        if (!networkEnv || !['testnet', 'mainnet'].includes(networkEnv)) {
+          throw new Error(`HEDERA_NETWORK must be 'testnet' or 'mainnet', got: ${networkEnv}`);
+        }
+
         const hederaClient = await createHederaClient({
           accountId,
           privateKey,
-          network: (process.env.HEDERA_NETWORK as 'testnet' | 'mainnet') ?? 'testnet',
+          network: networkEnv as 'testnet' | 'mainnet',
         });
 
         if (!topicId) {
@@ -611,7 +636,12 @@ router.post('/my/:id/audit', requireAuth, auditLimiter, async (req, res) => {
 
     if (accountId && privateKey) {
       try {
-        const hederaClient = await createHederaClient({ accountId, privateKey, network: (process.env.HEDERA_NETWORK as 'testnet' | 'mainnet') ?? 'testnet' });
+        const networkEnv = process.env.HEDERA_NETWORK;
+        if (!networkEnv || !['testnet', 'mainnet'].includes(networkEnv)) {
+          throw new Error(`HEDERA_NETWORK must be 'testnet' or 'mainnet', got: ${networkEnv}`);
+        }
+
+        const hederaClient = await createHederaClient({ accountId, privateKey, network: networkEnv as 'testnet' | 'mainnet' });
         if (!topicId) topicId = await createAuditTopic(hederaClient);
         const hcsResult = await submitCertificateToHCS(hederaClient, topicId, certificate);
         updateCertificateHCS(certificate.auditId, hcsResult.topicId, hcsResult.transactionId, hcsResult.sequenceNumber, hcsResult.consensusTimestamp);
@@ -657,6 +687,235 @@ router.patch('/my/:id/listing', requireAuth, (req, res) => {
   } catch (err) {
     logger.error('Toggle listing error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Failed to update listing', timestamp: Date.now() });
+  }
+});
+
+// ─── POST /v1/agents/audit/request ────────────────────────────────────────────
+// Mutual commitment protocol: initiate audit request
+router.post('/audit/request', requireApiKey, requireScope('audit'), validateBody(AuditRequestSchema), (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  const { agentId, auditPeriodStart, auditPeriodEnd, constraints, decisions, behaviorSamples } = req.body as z.infer<typeof AuditRequestSchema>;
+
+  const agent = getAgent(agentId);
+  if (!agent) {
+    res.status(404).json({ success: false, error: 'Agent not found', timestamp: Date.now() });
+    return;
+  }
+
+  try {
+    const auditRequestId = `audit_req_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+    const auditData = JSON.stringify({
+      agentId,
+      auditPeriodStart,
+      auditPeriodEnd,
+      constraints,
+      decisions,
+      behaviorSamples,
+    });
+
+    createAuditRequest(auditRequestId, agentId, authReq.apiKey.id, auditData);
+
+    // Emit webhook
+    emit.auditRequested({
+      auditRequestId,
+      agentId,
+      requesterKeyId: authReq.apiKey.id,
+    });
+
+    logger.info('Audit request initiated', {
+      auditRequestId,
+      agentId,
+      requestId: authReq.requestId,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: { auditRequestId, agentId, status: 'pending', createdAt: Date.now() },
+      timestamp: Date.now(),
+    });
+  } catch (err) {
+    logger.error('Audit request error', { error: String(err), agentId, requestId: authReq.requestId });
+    res.status(500).json({ success: false, error: 'Failed to create audit request', timestamp: Date.now() });
+  }
+});
+
+// ─── POST /v1/agents/audit/:auditRequestId/accept ──────────────────────────────
+// Mutual commitment protocol: accept audit request
+router.post('/audit/:auditRequestId/accept', requireApiKey, requireScope('audit'), validateBody(AuditAcceptSchema), async (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  const { auditRequestId } = req.params;
+  const { signature } = req.body as z.infer<typeof AuditAcceptSchema>;
+
+  try {
+    const auditRequest = getAuditRequest(auditRequestId);
+    if (!auditRequest) {
+      res.status(404).json({ success: false, error: 'Audit request not found', timestamp: Date.now() });
+      return;
+    }
+
+    if (auditRequest.status !== 'pending') {
+      res.status(400).json({
+        success: false,
+        error: `Audit request is ${auditRequest.status}, cannot accept`,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const agentId = auditRequest.agent_id as string;
+    const auditData = JSON.parse(auditRequest.audit_data as string);
+
+    // Run audit with accepted data
+    const auditInput: AuditInput = {
+      agentId,
+      agentVersion: '1.0.0',
+      ...auditData,
+    };
+
+    const certificate = runAudit(auditInput);
+
+    // Persist certificate
+    saveCertificate({
+      certificateId: certificate.certificateId,
+      agentId: certificate.agentId,
+      agentVersion: certificate.agentVersion,
+      auditId: certificate.auditId,
+      issuedAt: certificate.issuedAt,
+      auditPeriodStart: certificate.auditPeriodStart,
+      auditPeriodEnd: certificate.auditPeriodEnd,
+      scoreTotal: certificate.score.total,
+      scoreJson: JSON.stringify(certificate.score),
+      creditRating: certificate.creditRating,
+      inputHash: certificate.inputHash,
+      certificateHash: certificate.certificateHash,
+    });
+
+    // Update audit request status
+    updateAuditRequestStatus(auditRequestId, 'accepted', signature);
+
+    // Try to anchor AUDIT_COMMITMENT on HCS
+    const accountId = process.env.HEDERA_ACCOUNT_ID;
+    const privateKey = process.env.HEDERA_PRIVATE_KEY;
+    let topicId = process.env.HEDERA_AUDIT_TOPIC_ID;
+
+    if (accountId && privateKey) {
+      try {
+        const networkEnv = process.env.HEDERA_NETWORK;
+        if (!networkEnv || !['testnet', 'mainnet'].includes(networkEnv)) {
+          throw new Error(`HEDERA_NETWORK must be 'testnet' or 'mainnet', got: ${networkEnv}`);
+        }
+
+        const hederaClient = await createHederaClient({
+          accountId,
+          privateKey,
+          network: networkEnv as 'testnet' | 'mainnet',
+        });
+
+        if (!topicId) {
+          topicId = await createAuditTopic(hederaClient);
+          logger.info(`Created new HCS audit topic: ${topicId}. Set HEDERA_AUDIT_TOPIC_ID=${topicId} in .env`);
+        }
+
+        const message = JSON.stringify({
+          protocol: 'BorealisMark/1.0',
+          type: 'AUDIT_COMMITMENT',
+          auditRequestId,
+          certificateId: certificate.certificateId,
+          agentId,
+          requesterKeyId: auditRequest.requester_key_id,
+          agentOwnerSignature: signature,
+          issuedAt: certificate.issuedAt,
+        });
+
+        const { TopicMessageSubmitTransaction, TopicId } = await import('@hashgraph/sdk');
+        const tx = await new TopicMessageSubmitTransaction()
+          .setTopicId(TopicId.fromString(topicId))
+          .setMessage(message)
+          .execute(hederaClient);
+
+        const receipt = await tx.getReceipt(hederaClient);
+        logger.info('Audit commitment anchored on HCS', {
+          auditRequestId,
+          certificateId: certificate.certificateId,
+        });
+
+        hederaClient.close();
+      } catch (hcsErr) {
+        logger.warn('HCS commitment submission failed', {
+          error: String(hcsErr),
+          auditRequestId,
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        auditRequestId,
+        certificateId: certificate.certificateId,
+        agentId,
+        score: certificate.score.total,
+        creditRating: certificate.creditRating,
+        status: 'accepted',
+      },
+      timestamp: Date.now(),
+    });
+  } catch (err) {
+    logger.error('Audit acceptance error', { error: String(err), auditRequestId, requestId: authReq.requestId });
+    res.status(500).json({ success: false, error: 'Failed to accept audit request', timestamp: Date.now() });
+  }
+});
+
+// ─── POST /v1/agents/audit/:auditRequestId/reject ──────────────────────────────
+// Mutual commitment protocol: reject audit request
+router.post('/audit/:auditRequestId/reject', requireApiKey, requireScope('audit'), validateBody(AuditRejectSchema), (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  const { auditRequestId } = req.params;
+  const { reason } = req.body as z.infer<typeof AuditRejectSchema>;
+
+  try {
+    const auditRequest = getAuditRequest(auditRequestId);
+    if (!auditRequest) {
+      res.status(404).json({ success: false, error: 'Audit request not found', timestamp: Date.now() });
+      return;
+    }
+
+    if (auditRequest.status !== 'pending') {
+      res.status(400).json({
+        success: false,
+        error: `Audit request is ${auditRequest.status}, cannot reject`,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const agentId = auditRequest.agent_id as string;
+
+    // Update audit request status
+    updateAuditRequestStatus(auditRequestId, 'rejected');
+
+    // Emit webhook
+    emit.auditRejected({
+      auditRequestId,
+      agentId,
+      reason: reason || 'No reason provided',
+    });
+
+    logger.info('Audit request rejected', {
+      auditRequestId,
+      agentId,
+      reason,
+      requestId: authReq.requestId,
+    });
+
+    res.status(200).json({
+      success: true,
+      data: { auditRequestId, agentId, status: 'rejected', reason },
+      timestamp: Date.now(),
+    });
+  } catch (err) {
+    logger.error('Audit rejection error', { error: String(err), auditRequestId, requestId: authReq.requestId });
+    res.status(500).json({ success: false, error: 'Failed to reject audit request', timestamp: Date.now() });
   }
 });
 

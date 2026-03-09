@@ -49,6 +49,7 @@ function initSchema(db: Database.Database): void {
       revoked INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (agent_id) REFERENCES agents(id)
     );
+    CREATE INDEX IF NOT EXISTS idx_certificates_agent ON audit_certificates(agent_id);
 
     CREATE TABLE IF NOT EXISTS stakes (
       id TEXT PRIMARY KEY,
@@ -465,6 +466,14 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_dead_letters_webhook ON webhook_dead_letters(webhook_id);
     CREATE INDEX IF NOT EXISTS idx_dead_letters_resolved ON webhook_dead_letters(resolved_at);
 
+    -- ── Processed Webhooks (idempotency tracking) ──────────────────────────────
+    CREATE TABLE IF NOT EXISTS processed_webhooks (
+      event_id TEXT PRIMARY KEY,
+      processed_at TEXT DEFAULT (datetime('now')),
+      event_type TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_processed_webhooks_type ON processed_webhooks(event_type);
+
     -- ── Support Threads (Aurora AI conversations) ──────────────────────────────
     CREATE TABLE IF NOT EXISTS support_threads (
       id TEXT PRIMARY KEY,
@@ -517,6 +526,9 @@ function initSchema(db: Database.Database): void {
       metadata TEXT NOT NULL DEFAULT '{}',
       anchored INTEGER NOT NULL DEFAULT 0,
       anchor_tx_id TEXT,
+      anchor_status TEXT DEFAULT 'pending',
+      retry_count INTEGER DEFAULT 0,
+      last_retry_at TEXT,
       created_at INTEGER NOT NULL
     );
 
@@ -526,6 +538,24 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_events_target ON platform_events(target_id);
     CREATE INDEX IF NOT EXISTS idx_events_created ON platform_events(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_events_anchored ON platform_events(anchored);
+
+    -- ── Audit Requests (mutual commitment protocol) ────────────────────────────
+    CREATE TABLE IF NOT EXISTS audit_requests (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      requester_key_id TEXT NOT NULL,
+      audit_data TEXT NOT NULL,
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected','expired')),
+      signature TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      resolved_at TEXT,
+      expires_at TEXT,
+      FOREIGN KEY (agent_id) REFERENCES agents(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_requests_agent ON audit_requests(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_requests_status ON audit_requests(status);
+    CREATE INDEX IF NOT EXISTS idx_audit_requests_created ON audit_requests(created_at);
 
     -- ── Data Aggregates (pre-computed metrics) ──────────────────────────────────
     CREATE TABLE IF NOT EXISTS data_aggregates (
@@ -543,6 +573,11 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_aggregates_key ON data_aggregates(metric_key, period);
     CREATE INDEX IF NOT EXISTS idx_aggregates_period ON data_aggregates(period_start);
   `);
+
+  // Migrate: add retry_count column to platform_events (for HCS retry tracking)
+  const eventCols = (db.prepare("PRAGMA table_info(platform_events)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!eventCols.includes('retry_count')) db.exec("ALTER TABLE platform_events ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
+  if (!eventCols.includes('last_retry_at')) db.exec("ALTER TABLE platform_events ADD COLUMN last_retry_at INTEGER");
 
   // Migrate: add subscription tracking columns to users table
   const userCols = (db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>).map(r => r.name);
@@ -795,7 +830,8 @@ function initSchema(db: Database.Database): void {
       details TEXT,                 -- JSON with matched words/patterns
       action_taken TEXT,            -- 'warning' | 'mute_24h' | 'suspend_7d' | 'permanent_ban'
       created_at INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id)
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (message_id) REFERENCES messages(id)
     );
     CREATE INDEX IF NOT EXISTS idx_violations_user ON user_violations(user_id);
     CREATE INDEX IF NOT EXISTS idx_violations_created ON user_violations(created_at);
@@ -814,6 +850,7 @@ function initSchema(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_sanctions_user ON user_sanctions(user_id);
     CREATE INDEX IF NOT EXISTS idx_sanctions_status ON user_sanctions(status);
+    CREATE INDEX IF NOT EXISTS idx_sanctions_muted_until ON user_sanctions(muted_until);
 
     -- ── AI Bot Management ──────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS bots (
@@ -884,6 +921,16 @@ function initSchema(db: Database.Database): void {
   // Migrate: add featured flag to seller_storefronts
   const sfCols = (db.prepare("PRAGMA table_info(seller_storefronts)").all() as Array<{ name: string }>).map(r => r.name);
   if (!sfCols.includes('featured')) db.exec("ALTER TABLE seller_storefronts ADD COLUMN featured INTEGER DEFAULT 0");
+
+  // Migrate: add retry tracking columns to platform_events
+  const eventsCols = (db.prepare("PRAGMA table_info(platform_events)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!eventsCols.includes('retry_count')) db.exec("ALTER TABLE platform_events ADD COLUMN retry_count INTEGER DEFAULT 0");
+  if (!eventsCols.includes('last_retry_at')) db.exec("ALTER TABLE platform_events ADD COLUMN last_retry_at TEXT");
+  if (!eventsCols.includes('anchor_status')) db.exec("ALTER TABLE platform_events ADD COLUMN anchor_status TEXT DEFAULT 'pending'");
+
+  // Migrate: add expires_at column to audit_requests
+  const auditReqsCols = (db.prepare("PRAGMA table_info(audit_requests)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!auditReqsCols.includes('expires_at')) db.exec("ALTER TABLE audit_requests ADD COLUMN expires_at TEXT");
 
   // Backfill price_cad from price_usdc for existing listings (initial rate: 1 USDC ≈ 1.37 CAD)
   // This only runs once — subsequent listings will have price_cad set directly
@@ -3145,6 +3192,59 @@ export function markEventsAnchored(eventIds: string[], txId: string): void {
     for (const id of ids) stmt.run(txId, id);
   });
   batchUpdate(eventIds);
+}
+
+/**
+ * Increment retry count and update last_retry_at for a failed event.
+ * Called when HCS submission fails to track retry attempts.
+ */
+export function incrementEventRetryCount(eventId: string): number {
+  const db = getDb();
+  const now = Date.now();
+  db.prepare('UPDATE platform_events SET retry_count = retry_count + 1, last_retry_at = ? WHERE id = ?').run(now, eventId);
+  const row = db.prepare('SELECT retry_count FROM platform_events WHERE id = ?').get(eventId) as { retry_count: number } | undefined;
+  return row?.retry_count ?? 0;
+}
+
+/**
+ * Get events that should be retried: anchored=0, retry_count > 0 and < max, and enough time has passed.
+ * Respects exponential backoff: delay = min(2^retry_count * 1000, 60000) ms
+ */
+export function getFailedEventsForRetry(maxRetries: number = 5): Record<string, any>[] {
+  const db = getDb();
+  const now = Date.now();
+  const events = db.prepare(`
+    SELECT * FROM platform_events
+    WHERE anchored = 0
+      AND retry_count > 0
+      AND retry_count < ?
+      AND (last_retry_at IS NULL OR last_retry_at + CAST(MIN(POW(2, retry_count) * 1000, 60000) AS INTEGER) <= ?)
+    ORDER BY last_retry_at ASC, retry_count ASC
+    LIMIT 50
+  `).all(maxRetries, now) as Record<string, any>[];
+  return events;
+}
+
+// ─── Audit Requests (Mutual Commitment Protocol) ──────────────────────────
+
+export function createAuditRequest(id: string, agentId: string, requesterKeyId: string, auditData: string): void {
+  getDb().prepare(`
+    INSERT INTO audit_requests (id, agent_id, requester_key_id, audit_data, status)
+    VALUES (?, ?, ?, ?, 'pending')
+  `).run(id, agentId, requesterKeyId, auditData);
+}
+
+export function getAuditRequest(id: string): Record<string, any> | undefined {
+  return getDb().prepare('SELECT * FROM audit_requests WHERE id = ?').get(id) as Record<string, any> | undefined;
+}
+
+export function updateAuditRequestStatus(id: string, status: string, signature?: string): void {
+  const now = new Date().toISOString();
+  if (signature) {
+    getDb().prepare('UPDATE audit_requests SET status = ?, signature = ?, resolved_at = ? WHERE id = ?').run(status, signature, now, id);
+  } else {
+    getDb().prepare('UPDATE audit_requests SET status = ?, resolved_at = ? WHERE id = ?').run(status, now, id);
+  }
 }
 
 export function getPlatformEvents(opts: {

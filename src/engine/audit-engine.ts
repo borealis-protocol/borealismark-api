@@ -22,10 +22,14 @@ export function hashAuditInput(input: AuditInput): string {
     decisions: input.decisions
       .map((d) => ({ id: d.decisionId, inputHash: d.inputHash, outputHash: d.outputHash }))
       .sort((a, b) => a.id.localeCompare(b.id)),
+    behaviorSamples: input.behaviorSamples
+      .map((b) => ({ inputClass: b.inputClass, sampleCount: b.sampleCount, outputVariance: b.outputVariance, deterministicRate: b.deterministicRate }))
+      .sort((a, b) => a.inputClass.localeCompare(b.inputClass)),
     totalActions: input.totalActions,
     anomalyCount: input.anomalyCount,
     expectedLogEntries: input.expectedLogEntries,
     actualLogEntries: input.actualLogEntries,
+    ...(input.auditorId ? { auditorId: input.auditorId } : {}),
   });
   return createHash('sha256').update(canonical).digest('hex');
 }

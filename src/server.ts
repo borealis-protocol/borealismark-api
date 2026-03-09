@@ -25,6 +25,7 @@ import analyticsRouter from './routes/analytics';
 import adminRouter from './routes/admin';
 import adminMailRouter from './routes/adminMail';
 import { cleanupExpiredInvoices } from './hedera/usdc';
+import { validateHederaConfig, logHealthCheckResults } from './hedera/healthcheck';
 import { startAggregationSchedule } from './services/dataStore';
 import { startAnchoringSchedule } from './services/hederaAnchor';
 import { events as eventBus, initAdminNotifications } from './services/eventBus';
@@ -38,6 +39,64 @@ import { moderateServerSide, determineAction, actionToSanctionParams, type Sanct
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
+
+// ─── Environment Variable Validation ──────────────────────────────────────────
+
+function validateEnvironment(): void {
+  const required = ['JWT_SECRET', 'API_MASTER_KEY'];
+  const databaseVars = ['DATABASE_URL', 'DB_PATH'];
+  const hasDatabaseVar = databaseVars.some(v => process.env[v]);
+
+  // Check critical vars
+  const missing: string[] = [];
+  for (const varName of required) {
+    if (!process.env[varName]) {
+      missing.push(varName);
+    }
+  }
+
+  // Check database config
+  if (!hasDatabaseVar) {
+    missing.push('DATABASE_URL or DB_PATH');
+  }
+
+  if (missing.length > 0) {
+    logger.error('FATAL: Missing critical environment variables', { missing });
+    process.exit(1);
+  }
+
+  // Production-only requirements
+  if (process.env.NODE_ENV === 'production') {
+    const prodRequired = ['HEDERA_ACCOUNT_ID', 'HEDERA_PRIVATE_KEY', 'STRIPE_SECRET_KEY', 'RESEND_API_KEY'];
+    const prodMissing: string[] = [];
+    for (const varName of prodRequired) {
+      if (!process.env[varName]) {
+        prodMissing.push(varName);
+      }
+    }
+    if (prodMissing.length > 0) {
+      logger.error('FATAL: Missing production environment variables', { missing: prodMissing });
+      process.exit(1);
+    }
+  }
+
+  // Warnings for optional but recommended vars
+  const recommended = ['HEDERA_NETWORK', 'STRIPE_WEBHOOK_SECRET', 'FRONTEND_URL'];
+  const missingOptional = recommended.filter(v => !process.env[v]);
+  if (missingOptional.length > 0) {
+    logger.warn('Optional environment variables not set', { missing: missingOptional });
+  }
+
+  logger.info('Environment validation passed');
+}
+
+// Validate environment at startup
+validateEnvironment();
+
+// ─── Hedera Configuration Health Check ────────────────────────────────────
+
+const hederaHealth = validateHederaConfig();
+logHealthCheckResults(hederaHealth);
 
 // ─── Security Hardening ───────────────────────────────────────────────────────
 
@@ -74,10 +133,12 @@ app.use(cors({
       'https://borealisterminal.com', 'https://www.borealisterminal.com',
       'https://borealisprotocol.ai', 'https://www.borealisprotocol.ai',
     ];
+    // Allow exact localhost/127.0.0.1 with any port (strict regex to prevent localhost.evil.com)
+    const localhostRegex = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
     // Allow all Cloudflare Pages preview URLs
     if (allowed.includes(origin)
         || origin.endsWith('.pages.dev')
-        || origin.includes('localhost')) {
+        || localhostRegex.test(origin)) {
       return callback(null, true);
     }
     callback(null, false);
@@ -147,12 +208,28 @@ app.get('/sitemap.xml', (_req, res) => {
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'BorealisMark Protocol API',
-    version: '1.4.0',
-    timestamp: Date.now(),
-  });
+  try {
+    // Verify database connectivity with a simple query
+    const db = getDb();
+    db.prepare('SELECT 1').get();
+
+    res.json({
+      status: 'healthy',
+      service: 'BorealisMark Protocol API',
+      version: '1.4.0',
+      database: 'connected',
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    logger.error('Health check failed', { error: err.message });
+    res.status(503).json({
+      status: 'unhealthy',
+      service: 'BorealisMark Protocol API',
+      database: 'disconnected',
+      error: err.message,
+      timestamp: Date.now(),
+    });
+  }
 });
 
 // ─── 404 ──────────────────────────────────────────────────────────────────────
@@ -278,11 +355,15 @@ setInterval(async () => {
       const previousPlan = PLAN_DISPLAY_NAMES[user.subscriptionPlanId ?? previousTier] ?? previousTier;
       const newLimit = BOT_LIMITS_SERVER.standard;
 
-      // 1. Downgrade tier
-      updateUserTier(user.id, 'standard');
+      // Wrap tier downgrade and bot deactivation in a database transaction to prevent race conditions
+      const db = getDb();
+      const suspended = db.transaction(() => {
+        // 1. Downgrade tier
+        updateUserTier(user.id, 'standard');
 
-      // 2. Deactivate excess bots (keep the 3 most active)
-      const suspended = deactivateExcessBots(user.id, newLimit);
+        // 2. Deactivate excess bots (keep the 3 most active)
+        return deactivateExcessBots(user.id, newLimit);
+      })();
 
       // 3. Send downgrade notification email
       await sendDowngradeNotificationEmail(
@@ -340,6 +421,24 @@ setInterval(async () => {
 
         const action = determineAction(violationCount, result.severity);
         const sanctionParams = actionToSanctionParams(action as SanctionAction);
+
+        // Check if user already has an active sanction to prevent double-sanctioning
+        const existingSanction = db.prepare(
+          'SELECT status, muted_until, suspended_until FROM user_sanctions WHERE user_id = ? LIMIT 1'
+        ).get(msg.sender_id) as any;
+
+        const now = Date.now();
+        const hasActiveMute = existingSanction?.status === 'muted' && existingSanction.muted_until && existingSanction.muted_until > now;
+        const hasActiveSuspension = existingSanction?.status === 'suspended' && existingSanction.suspended_until && existingSanction.suspended_until > now;
+
+        // Skip if user already has an active sanction
+        if (hasActiveMute || hasActiveSuspension) {
+          logger.info('Skipping sanction — user already has active sanction', {
+            userId: msg.sender_id,
+            existingStatus: existingSanction?.status,
+          });
+          return;
+        }
 
         // Log violation
         db.prepare(`
