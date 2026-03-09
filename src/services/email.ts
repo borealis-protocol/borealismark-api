@@ -216,6 +216,197 @@ This link will expire in 24 hours. If you didn't create this account, you can sa
   }
 }
 
+// ─── Subscription Expiry Reminder ──────────────────────────────────────────────
+
+/**
+ * Send a subscription expiry reminder email.
+ * Called at 30 days, 7 days, and 1 day before expiry.
+ */
+export async function sendSubscriptionExpiryReminder(
+  toEmail: string,
+  userName: string,
+  daysRemaining: number,
+  planName: string,
+  botCount: number,
+  botLimit: number,
+): Promise<boolean> {
+  const frontendUrl = process.env.FRONTEND_URL ?? 'https://borealismark.com';
+  const renewLink = `${frontendUrl}/dashboard.html?tab=billing`;
+
+  const urgencyColor = daysRemaining <= 1 ? '#FF4444' : daysRemaining <= 7 ? '#FFA500' : '#D4A853';
+  const urgencyText = daysRemaining <= 1
+    ? 'Your subscription expires tomorrow!'
+    : daysRemaining <= 7
+    ? `Your subscription expires in ${daysRemaining} days`
+    : `Your subscription expires in ${daysRemaining} days`;
+
+  const botWarning = botCount > botLimit
+    ? `<div style="background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.3);border-radius:8px;padding:16px;margin:16px 0">
+        <p style="color:#FF4444;font-weight:600;margin:0 0 8px 0">Bot Deactivation Warning</p>
+        <p style="color:#A0A0A0;margin:0;font-size:14px">You currently have <strong style="color:#fff">${botCount} active bots</strong>. The Standard plan allows <strong style="color:#fff">${botLimit} bots</strong>. If you don't renew, your <strong style="color:#FF4444">${botCount - botLimit} least active bots will be automatically suspended</strong>. Their data and history will be preserved — you can reactivate them by upgrading again.</p>
+      </div>`
+    : '';
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: #0C0D10; color: #E0E0E0; }
+    .container { max-width: 560px; margin: 40px auto; padding: 0 20px; }
+    .card { background: #16171C; border: 1px solid #2A2B33; border-radius: 12px; padding: 40px 32px; }
+    .logo { color: #D4A853; font-size: 20px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 24px; }
+    h1 { font-size: 22px; font-weight: 600; color: #FFFFFF; margin: 0 0 16px 0; }
+    p { font-size: 15px; line-height: 1.6; color: #A0A0A0; margin: 0 0 16px 0; }
+    .btn { display: inline-block; background: #D4A853; color: #0C0D10; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px; margin: 8px 0 24px 0; }
+    .divider { border-top: 1px solid #2A2B33; margin: 24px 0; }
+    .small { font-size: 13px; color: #666; }
+    .footer { text-align: center; padding: 24px 0; font-size: 12px; color: #555; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="logo">BorealisMark</div>
+      <h1 style="color:${urgencyColor}">${urgencyText}</h1>
+      <p>Hi ${userName || 'there'},</p>
+      <p>Your <strong style="color:#fff">${planName}</strong> subscription is expiring soon. Without renewal, your account will be downgraded to the Standard (free) tier.</p>
+      ${botWarning}
+      <p>Renew now to keep your bots running, your AP multiplier active, and your position on the leaderboard:</p>
+      <a href="${renewLink}" class="btn">Renew Subscription</a>
+      <div class="divider"></div>
+      <p class="small">Pay with USDC on Hedera and save 5% on your renewal. Your BM Scores, badges, and audit history are always preserved regardless of plan.</p>
+    </div>
+    <div class="footer">
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification on Hedera
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `${urgencyText}\n\nHi ${userName || 'there'},\n\nYour ${planName} subscription is expiring soon. Without renewal, your account will be downgraded to Standard.${botCount > botLimit ? `\n\nWARNING: You have ${botCount} active bots but Standard only allows ${botLimit}. Your ${botCount - botLimit} least active bots will be suspended.` : ''}\n\nRenew here: ${renewLink}\n\n— BorealisMark Protocol`;
+
+  if (!process.env.RESEND_API_KEY) {
+    logger.info('Subscription expiry reminder (NOT SENT — no RESEND_API_KEY)', {
+      to: toEmail, daysRemaining, planName, botCount, botLimit,
+    });
+    return true;
+  }
+
+  try {
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [toEmail],
+      subject: `${urgencyText} — BorealisMark ${planName}`,
+      html,
+      text,
+    });
+
+    if (result.error) {
+      logger.error('Expiry reminder send failed', { error: result.error, to: toEmail });
+      return false;
+    }
+
+    logger.info('Subscription expiry reminder sent', { to: toEmail, daysRemaining, planName });
+    return true;
+  } catch (err: any) {
+    logger.error('Expiry reminder error', { error: err.message, to: toEmail });
+    return false;
+  }
+}
+
+/**
+ * Send a downgrade notification email after bots have been suspended.
+ */
+export async function sendDowngradeNotificationEmail(
+  toEmail: string,
+  userName: string,
+  previousPlan: string,
+  suspendedBots: Array<{ name: string; id: string }>,
+): Promise<boolean> {
+  const frontendUrl = process.env.FRONTEND_URL ?? 'https://borealismark.com';
+  const upgradeLink = `${frontendUrl}/dashboard.html?tab=billing`;
+
+  const botListHtml = suspendedBots.length > 0
+    ? `<div style="background:rgba(255,68,68,0.08);border:1px solid rgba(255,68,68,0.2);border-radius:8px;padding:16px;margin:16px 0">
+        <p style="color:#FF4444;font-weight:600;margin:0 0 8px 0">Suspended Bots (${suspendedBots.length})</p>
+        ${suspendedBots.map(b => `<p style="color:#A0A0A0;margin:4px 0;font-size:14px">&bull; ${b.name} <span style="color:#666;font-size:12px">(${b.id})</span></p>`).join('')}
+        <p style="color:#888;margin:8px 0 0 0;font-size:13px">Their BM Scores, AP, and history are preserved. Upgrade to reactivate.</p>
+      </div>`
+    : '';
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: #0C0D10; color: #E0E0E0; }
+    .container { max-width: 560px; margin: 40px auto; padding: 0 20px; }
+    .card { background: #16171C; border: 1px solid #2A2B33; border-radius: 12px; padding: 40px 32px; }
+    .logo { color: #D4A853; font-size: 20px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 24px; }
+    h1 { font-size: 22px; font-weight: 600; color: #FFFFFF; margin: 0 0 16px 0; }
+    p { font-size: 15px; line-height: 1.6; color: #A0A0A0; margin: 0 0 16px 0; }
+    .btn { display: inline-block; background: #D4A853; color: #0C0D10; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px; margin: 8px 0 24px 0; }
+    .divider { border-top: 1px solid #2A2B33; margin: 24px 0; }
+    .small { font-size: 13px; color: #666; }
+    .footer { text-align: center; padding: 24px 0; font-size: 12px; color: #555; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="logo">BorealisMark</div>
+      <h1>Your subscription has expired</h1>
+      <p>Hi ${userName || 'there'},</p>
+      <p>Your <strong style="color:#fff">${previousPlan}</strong> subscription has expired and your account has been downgraded to the <strong style="color:#fff">Standard (free)</strong> tier.</p>
+      ${botListHtml}
+      <p>You can upgrade at any time to reactivate your bots and restore your full capabilities:</p>
+      <a href="${upgradeLink}" class="btn">Upgrade Now</a>
+      <div class="divider"></div>
+      <p class="small">Your BM Scores, certifications, AP history, and badges are always preserved regardless of plan changes.</p>
+    </div>
+    <div class="footer">
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification on Hedera
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Your ${previousPlan} subscription has expired.\n\nYour account has been downgraded to Standard (free).${suspendedBots.length > 0 ? `\n\nSuspended bots: ${suspendedBots.map(b => b.name).join(', ')}` : ''}\n\nUpgrade: ${upgradeLink}\n\n— BorealisMark Protocol`;
+
+  if (!process.env.RESEND_API_KEY) {
+    logger.info('Downgrade notification (NOT SENT — no RESEND_API_KEY)', {
+      to: toEmail, previousPlan, suspendedCount: suspendedBots.length,
+    });
+    return true;
+  }
+
+  try {
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [toEmail],
+      subject: `Subscription Expired — ${suspendedBots.length > 0 ? `${suspendedBots.length} bots suspended` : 'Account downgraded'}`,
+      html,
+      text,
+    });
+
+    if (result.error) {
+      logger.error('Downgrade notification send failed', { error: result.error, to: toEmail });
+      return false;
+    }
+
+    logger.info('Downgrade notification sent', { to: toEmail, suspendedCount: suspendedBots.length });
+    return true;
+  } catch (err: any) {
+    logger.error('Downgrade notification error', { error: err.message, to: toEmail });
+    return false;
+  }
+}
+
 // ─── Order Email Templates ─────────────────────────────────────────────────────
 
 interface OrderEmailData {

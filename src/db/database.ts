@@ -1241,6 +1241,53 @@ export function getExpiredUsdcSubscriptions(): UserRecord[] {
   return rows.map(rowToUser);
 }
 
+/**
+ * Get all expired subscriptions (any method) as a safety net.
+ * Catches Stripe subscriptions where webhook was missed.
+ */
+export function getAllExpiredSubscriptions(): UserRecord[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM users WHERE subscription_expires_at IS NOT NULL AND subscription_expires_at < ? AND tier != 'standard' AND active = 1",
+    )
+    .all(Date.now()) as Array<Record<string, unknown>>;
+  return rows.map(rowToUser);
+}
+
+/**
+ * Get users whose subscription expires within the given window (for reminders).
+ * Returns users who haven't been reminded yet within this window.
+ */
+export function getExpiringSubscriptions(withinMs: number): UserRecord[] {
+  const now = Date.now();
+  const cutoff = now + withinMs;
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM users WHERE subscription_expires_at IS NOT NULL AND subscription_expires_at > ? AND subscription_expires_at <= ? AND tier != 'standard' AND active = 1",
+    )
+    .all(now, cutoff) as Array<Record<string, unknown>>;
+  return rows.map(rowToUser);
+}
+
+/**
+ * Get a user's active bots sorted by least active (for deactivation on downgrade).
+ * Sorts by: jobs_completed ASC, ap_points ASC, last active ASC — least valuable first.
+ */
+export function getBotsByOwnerSortedByActivity(ownerId: string): BotRecord[] {
+  return getDb().prepare(
+    "SELECT * FROM bots WHERE owner_id = ? AND status = 'active' ORDER BY jobs_completed ASC, ap_points ASC, star_rating ASC, created_at DESC",
+  ).all(ownerId) as BotRecord[];
+}
+
+/**
+ * Deactivate a bot by ID (soft delete — sets status to 'suspended').
+ */
+export function suspendBot(botId: string): void {
+  getDb().prepare(
+    "UPDATE bots SET status = 'suspended', updated_at = ? WHERE id = ?",
+  ).run(new Date().toISOString(), botId);
+}
+
 // ─── Coupon Queries ──────────────────────────────────────────────────────────
 
 export interface CouponRecord {

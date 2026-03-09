@@ -21,7 +21,12 @@ import docsRouter from './routes/docs';
 import imageProxyRouter from './routes/imageProxy';
 import botsRouter from './routes/bots';
 import { cleanupExpiredInvoices } from './hedera/usdc';
-import { getExpiredUsdcSubscriptions, updateUserTier, getExpiredSanctions, upsertUserSanction } from './db/database';
+import {
+  getExpiredUsdcSubscriptions, getAllExpiredSubscriptions, getExpiringSubscriptions,
+  updateUserTier, getExpiredSanctions, upsertUserSanction,
+  getBotsByOwnerSortedByActivity, suspendBot, countBotsByOwnerId,
+} from './db/database';
+import { sendSubscriptionExpiryReminder, sendDowngradeNotificationEmail } from './services/email';
 import { moderateServerSide, determineAction, actionToSanctionParams, type SanctionAction } from './middleware/messageModeration';
 
 const app = express();
@@ -189,21 +194,102 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
-// Check for expired USDC subscriptions every hour and downgrade
-setInterval(() => {
+// ─── Subscription Lifecycle: Reminders, Expiry, Bot Deactivation ─────────────
+
+const BOT_LIMITS_SERVER: Record<string, number> = { standard: 3, pro: 10, elite: 50 };
+const PLAN_DISPLAY_NAMES: Record<string, string> = { pro: 'Pro', elite: 'Elite', starter: 'API Starter', business: 'API Business', enterprise: 'API Enterprise' };
+
+/**
+ * Deactivate excess bots when a user is downgraded.
+ * Keeps the N most active bots (by jobs, AP, rating) and suspends the rest.
+ */
+function deactivateExcessBots(userId: string, newLimit: number): Array<{ name: string; id: string }> {
+  const bots = getBotsByOwnerSortedByActivity(userId); // sorted least active first
+  if (bots.length <= newLimit) return [];
+
+  const toSuspend = bots.slice(0, bots.length - newLimit); // least active get suspended
+  const suspended: Array<{ name: string; id: string }> = [];
+
+  for (const bot of toSuspend) {
+    suspendBot(bot.id);
+    suspended.push({ name: bot.name, id: bot.id });
+    logger.info('Bot suspended due to tier downgrade', {
+      botId: bot.id, botName: bot.name, userId,
+      reason: 'subscription_expired',
+    });
+  }
+
+  return suspended;
+}
+
+// Check for expiring subscriptions and send reminders (every 6 hours)
+setInterval(async () => {
   try {
-    const expired = getExpiredUsdcSubscriptions();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const windows = [
+      { within: 30 * DAY_MS, label: 30 },
+      { within: 7 * DAY_MS, label: 7 },
+      { within: 1 * DAY_MS, label: 1 },
+    ];
+
+    for (const { within, label } of windows) {
+      const expiring = getExpiringSubscriptions(within);
+      for (const user of expiring) {
+        if (!user.subscriptionExpiresAt) continue;
+        const daysLeft = Math.ceil((user.subscriptionExpiresAt - Date.now()) / DAY_MS);
+        // Only send at the right window (30, 7, or 1 day)
+        if (Math.abs(daysLeft - label) > 1) continue;
+
+        const planName = PLAN_DISPLAY_NAMES[user.subscriptionPlanId ?? 'pro'] ?? 'Pro';
+        const botCount = countBotsByOwnerId(user.id);
+        const newLimit = BOT_LIMITS_SERVER.standard;
+
+        await sendSubscriptionExpiryReminder(
+          user.email, user.name ?? user.email, daysLeft, planName, botCount, newLimit,
+        );
+        logger.info('Expiry reminder sent', {
+          userId: user.id, email: user.email, daysLeft, planName, botCount,
+        });
+      }
+    }
+  } catch (err: any) {
+    logger.error('Failed to send expiry reminders', { error: err.message });
+  }
+}, 6 * 60 * 60 * 1000); // every 6 hours
+
+// Check for expired subscriptions (ALL methods) every hour — downgrade + deactivate bots
+setInterval(async () => {
+  try {
+    // Safety net: catches both USDC and any missed Stripe webhook expirations
+    const expired = getAllExpiredSubscriptions();
     for (const user of expired) {
+      const previousTier = user.tier;
+      const previousPlan = PLAN_DISPLAY_NAMES[user.subscriptionPlanId ?? previousTier] ?? previousTier;
+      const newLimit = BOT_LIMITS_SERVER.standard;
+
+      // 1. Downgrade tier
       updateUserTier(user.id, 'standard');
-      logger.info('USDC subscription expired → downgraded to standard', {
+
+      // 2. Deactivate excess bots (keep the 3 most active)
+      const suspended = deactivateExcessBots(user.id, newLimit);
+
+      // 3. Send downgrade notification email
+      await sendDowngradeNotificationEmail(
+        user.email, user.name ?? user.email, previousPlan, suspended,
+      );
+
+      logger.info('Subscription expired → full downgrade processed', {
         userId: user.id,
         email: user.email,
-        previousTier: user.tier,
+        previousTier,
+        previousPlan,
+        botsSuspended: suspended.length,
+        botsKept: newLimit,
         expiredAt: user.subscriptionExpiresAt ? new Date(user.subscriptionExpiresAt).toISOString() : 'unknown',
       });
     }
     if (expired.length > 0) {
-      logger.info('Expired USDC subscriptions processed', { count: expired.length });
+      logger.info('Expired subscriptions processed', { count: expired.length, totalBotsSuspended: expired.length });
     }
   } catch (err: any) {
     logger.error('Failed to process expired subscriptions', { error: err.message });
