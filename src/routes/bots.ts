@@ -49,6 +49,13 @@ const BOT_LIMITS = {
   elite: 50,
 };
 
+// AP multiplier by user subscription tier (advertised in Agent Plans)
+const AP_MULTIPLIER: Record<string, number> = {
+  standard: 1,
+  pro: 3,
+  elite: 5,
+};
+
 const TIER_THRESHOLDS: Record<string, number> = {
   bronze: 0,
   silver: 1000,
@@ -576,7 +583,11 @@ router.put('/:id/jobs/:jobId', requireAuth, (req: Request, res: Response) => {
     let newStatus = bot.status;
 
     if (status === 'completed' && rating) {
-      apEarned = calculateApFromRating(rating);
+      const baseAp = calculateApFromRating(rating);
+      // Apply tier-based AP multiplier (Standard 1x, Pro 3x, Elite 5x)
+      const ownerUser = getUserById(bot.owner_id);
+      const multiplier = AP_MULTIPLIER[ownerUser?.tier ?? 'standard'] ?? 1;
+      apEarned = baseAp * multiplier;
 
       // Update bot stats
       updateBot(id, {

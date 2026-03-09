@@ -49,11 +49,26 @@ export const passwordResetLimiter = rateLimit({
 
 // ─── Audit Limiter ────────────────────────────────────────────────────────────
 // Running an audit involves Hedera consensus submission — computationally and
-// financially non-trivial. 20 per minute per API key is a hard ceiling.
+// financially non-trivial. Tier-based limits:
+//   Standard/Free: 20/min  |  Pro: 50/min (priority)  |  Elite: 100/min (dedicated)
+
+const AUDIT_LIMITS_BY_TIER: Record<string, number> = {
+  free: 20,
+  standard: 20,
+  starter: 30,
+  pro: 50,
+  business: 60,
+  elite: 100,
+  enterprise: 200,
+};
 
 export const auditLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 20,
+  max: (req) => {
+    const authReq = req as any;
+    const tier = authReq.apiKey?.tier ?? authReq.user?.tier ?? 'standard';
+    return AUDIT_LIMITS_BY_TIER[tier] ?? 20;
+  },
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,

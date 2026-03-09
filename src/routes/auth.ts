@@ -299,6 +299,11 @@ router.get('/me', requireAuth, (req: Request, res: Response) => {
     return;
   }
 
+  // Determine user badge from tier
+  const TIER_BADGES: Record<string, string | null> = {
+    standard: null, pro: 'pro', elite: 'elite', platinum: 'trusted-seller', sovereign: 'sovereign',
+  };
+
   res.json({
     success: true,
     data: {
@@ -307,6 +312,7 @@ router.get('/me', requireAuth, (req: Request, res: Response) => {
       name: user.name,
       tier: user.tier,
       role: user.role,
+      badge: TIER_BADGES[user.tier] ?? null,
       stripeCustomerId: user.stripeCustomerId,
       createdAt: user.createdAt,
       lastLoginAt: user.lastLoginAt,

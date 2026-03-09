@@ -61,7 +61,7 @@ const TIER_PRIVILEGES: Record<string, TierPrivileges> = {
     requiresAudit: true,
     auditType: 'light',       // Auto-approved if keyword scan is clean
     canCreateCategories: false,
-    badge: null,
+    badge: 'pro',
   },
   elite: {
     maxActiveListings: 100,

@@ -42,7 +42,14 @@ const router = Router();
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
-const PLATFORM_FEE_PERCENT = 2.5;
+// Tier-based transaction fees (advertised in Agent Plans)
+const PLATFORM_FEE_BY_TIER: Record<string, number> = {
+  standard: 2.5,
+  pro: 2.5,
+  elite: 1.5,
+  enterprise: 1.0,
+};
+const DEFAULT_FEE_PERCENT = 2.5;
 const SELLER_BOND_PERCENT = 25;
 const ESCROW_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes to complete each deposit
 
@@ -923,8 +930,12 @@ async function settleOrder(orderId: string): Promise<{
   const order = getOrderById(orderId);
   if (!order) throw new Error('Order not found');
 
+  // Look up seller's tier to determine transaction fee rate
+  const seller = getUserById(order.seller_id as string);
+  const feePercent = PLATFORM_FEE_BY_TIER[seller?.tier ?? 'standard'] ?? DEFAULT_FEE_PERCENT;
+
   const totalUsdc = order.total_usdc as number;
-  const platformFee = roundUsdc(totalUsdc * PLATFORM_FEE_PERCENT / 100);
+  const platformFee = roundUsdc(totalUsdc * feePercent / 100);
   const sellerPayout = roundUsdc(totalUsdc - platformFee);
 
   const deposits = getEscrowDeposits(orderId);

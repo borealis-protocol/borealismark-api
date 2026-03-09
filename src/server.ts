@@ -20,6 +20,8 @@ import usageRouter from './routes/usage';
 import docsRouter from './routes/docs';
 import imageProxyRouter from './routes/imageProxy';
 import botsRouter from './routes/bots';
+import supportRouter from './routes/support';
+import analyticsRouter from './routes/analytics';
 import { cleanupExpiredInvoices } from './hedera/usdc';
 import {
   getExpiredUsdcSubscriptions, getAllExpiredSubscriptions, getExpiringSubscriptions,
@@ -101,6 +103,8 @@ app.use('/v1/usage',    usageRouter);
 app.use('/v1/docs',     docsRouter);
 app.use('/v1/images',   imageProxyRouter);
 app.use('/v1/bots',     botsRouter);
+app.use('/v1/support',  supportRouter);
+app.use('/v1/analytics', analyticsRouter);
 
 // ─── Static Files (Dashboard) ────────────────────────────────────────────────
 
@@ -153,7 +157,7 @@ app.use((_req, res) => {
     available: [
       '/v1/auth', '/v1/agents', '/v1/staking', '/v1/network', '/v1/marks',
       '/v1/keys', '/v1/webhooks', '/v1/payments', '/v1/terminal', '/v1/marketplace',
-      '/v1/usage', '/v1/docs', '/v1/bots', '/health',
+      '/v1/usage', '/v1/docs', '/v1/bots', '/v1/support', '/v1/analytics', '/health',
     ],
     timestamp: Date.now(),
   });
@@ -456,6 +460,9 @@ app.listen(PORT, () => {
 ║    GET  /v1/bots/:id/jobs        Get bot job history    ║
 ║    POST /v1/bots/:id/review      Admin review bot       ║
 ║    GET  /v1/bots/stats           Global bot stats       ║
+║    POST /v1/support/chat         AI support chat        ║
+║    POST /v1/support/email-inbound Email webhook         ║
+║    GET  /v1/support/health       Support status         ║
 ║    GET  /health                   Health check           ║
 ╚══════════════════════════════════════════════════════════╝
     `);

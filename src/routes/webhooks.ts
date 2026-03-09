@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireApiKey, requireScope } from '../middleware/auth';
 import { validateBody } from '../middleware/validate';
-import { createWebhook, listWebhooks, deleteWebhook } from '../db/database';
+import { createWebhook, listWebhooks, deleteWebhook, getApiKeyTier } from '../db/database';
 import { auditLog } from '../middleware/logger';
 import { webhookLimiter } from '../middleware/rateLimiter';
 import { WEBHOOK_EVENTS, emit } from '../engine/webhook-dispatcher';
@@ -63,12 +63,17 @@ router.post(
       return;
     }
 
-    // Check webhook limit per API key
+    // Check webhook limit per API key (tier-based: free=2, starter=5, business=25, enterprise=unlimited)
+    const WEBHOOK_LIMITS: Record<string, number> = { free: 2, starter: 5, business: 25, enterprise: Infinity };
+    const apiTier = getApiKeyTier(authReq.apiKey.id);
+    const webhookLimit = WEBHOOK_LIMITS[apiTier] ?? 2;
     const existing = listWebhooks(authReq.apiKey.id);
-    if (existing.length >= 10) {
+    if (existing.length >= webhookLimit) {
       res.status(400).json({
         success: false,
-        error: 'Maximum 10 webhooks per API key',
+        error: `Webhook limit reached for ${apiTier} tier (${webhookLimit} webhooks). Upgrade for more.`,
+        limit: webhookLimit,
+        current: existing.length,
         timestamp: Date.now(),
       });
       return;
