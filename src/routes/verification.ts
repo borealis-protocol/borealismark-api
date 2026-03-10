@@ -534,11 +534,18 @@ router.get('/status', requireAuth, (req: Request, res: Response) => {
         reviewNotes: v.status === 'rejected' ? v.reviewNotes : undefined,
       }));
 
+    const hederaPoints = trustScore.hederaTxCount * TRUST_POINTS.HEDERA_TX_BONUS;
+    const stripePoints = trustScore.stripeTxCount * TRUST_POINTS.STRIPE_TX_BONUS;
     const transactionLayer = {
       type: 'transaction_history',
       count: trustScore.transactionCount,
-      points: Math.min(trustScore.transactionCount * TRUST_POINTS.TRANSACTION_BONUS, TRUST_POINTS.TRANSACTION_MAX),
+      hederaTxCount: trustScore.hederaTxCount,
+      stripeTxCount: trustScore.stripeTxCount,
+      hederaPoints,
+      stripePoints,
+      points: Math.min(hederaPoints + stripePoints, TRUST_POINTS.TRANSACTION_MAX),
       maxPoints: TRUST_POINTS.TRANSACTION_MAX,
+      description: `Hedera: ${trustScore.hederaTxCount} tx × ${TRUST_POINTS.HEDERA_TX_BONUS} pts | Stripe: ${trustScore.stripeTxCount} tx × ${TRUST_POINTS.STRIPE_TX_BONUS} pt`,
     };
 
     const accountAgeLayer = {

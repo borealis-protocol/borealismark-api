@@ -680,9 +680,11 @@ function initSchema(db: Database.Database): void {
       tracking_number TEXT,
       shipped_at INTEGER,
       delivery_confirmed_at INTEGER,
+      settlement_type TEXT NOT NULL DEFAULT 'unknown', -- 'hedera' | 'stripe' | 'unknown'
       hedera_transaction_id TEXT,
       hcs_topic_id TEXT,
       hcs_sequence_number INTEGER,
+      stripe_payment_intent_id TEXT,
       completed_at INTEGER,
       settled_at INTEGER,
       dispute_reason TEXT,
@@ -963,11 +965,13 @@ function initSchema(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS user_trust_scores (
       user_id TEXT PRIMARY KEY,
       total_score INTEGER NOT NULL DEFAULT 0,
-      trust_level TEXT NOT NULL DEFAULT 'unverified', -- 'unverified' | 'basic' | 'verified' | 'trusted' | 'premium'
+      trust_level TEXT NOT NULL DEFAULT 'unverified', -- 'unverified' | 'basic' | 'verified' | 'trusted' | 'premium' | 'elite'
       email_verified INTEGER NOT NULL DEFAULT 0,
       social_verified INTEGER NOT NULL DEFAULT 0,       -- count of verified social accounts
       document_verified INTEGER NOT NULL DEFAULT 0,
-      transaction_count INTEGER NOT NULL DEFAULT 0,
+      transaction_count INTEGER NOT NULL DEFAULT 0,     -- total completed transactions
+      hedera_tx_count INTEGER NOT NULL DEFAULT 0,       -- Hedera-settled transactions (2 pts each)
+      stripe_tx_count INTEGER NOT NULL DEFAULT 0,       -- Stripe-settled transactions (1 pt each)
       account_age_days INTEGER NOT NULL DEFAULT 0,
       last_computed_at INTEGER NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id)
@@ -1052,6 +1056,18 @@ function initSchema(db: Database.Database): void {
       logger.info('Set BundlesofJoy storefront as featured');
     }
   }
+
+  // Migrate: add dual-rail transaction columns to marketplace_orders and user_trust_scores
+  const orderColsV2 = (db.prepare("PRAGMA table_info(marketplace_orders)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!orderColsV2.includes('settlement_type'))          db.exec("ALTER TABLE marketplace_orders ADD COLUMN settlement_type TEXT NOT NULL DEFAULT 'unknown'");
+  if (!orderColsV2.includes('stripe_payment_intent_id')) db.exec("ALTER TABLE marketplace_orders ADD COLUMN stripe_payment_intent_id TEXT");
+
+  const trustColsV2 = (db.prepare("PRAGMA table_info(user_trust_scores)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!trustColsV2.includes('hedera_tx_count')) db.exec("ALTER TABLE user_trust_scores ADD COLUMN hedera_tx_count INTEGER NOT NULL DEFAULT 0");
+  if (!trustColsV2.includes('stripe_tx_count')) db.exec("ALTER TABLE user_trust_scores ADD COLUMN stripe_tx_count INTEGER NOT NULL DEFAULT 0");
+
+  // Backfill settlement_type for existing orders that have hedera_transaction_id
+  db.exec("UPDATE marketplace_orders SET settlement_type = 'hedera' WHERE hedera_transaction_id IS NOT NULL AND settlement_type = 'unknown'");
 
   // Ensure the master API key exists with full admin scopes
   const masterKey = process.env.API_MASTER_KEY;
@@ -3527,6 +3543,8 @@ export interface TrustScoreRecord {
   socialVerified: number;
   documentVerified: number;
   transactionCount: number;
+  hederaTxCount: number;
+  stripeTxCount: number;
   accountAgeDays: number;
   lastComputedAt: number;
 }
@@ -3540,8 +3558,10 @@ export const TRUST_POINTS = {
   ACCOUNT_AGE_30D: 5,      // bonus for 30+ day old account
   ACCOUNT_AGE_90D: 10,     // bonus for 90+ day old account
   ACCOUNT_AGE_180D: 15,    // bonus for 180+ day old account
-  TRANSACTION_BONUS: 2,    // per completed transaction (max 20 pts = 10 transactions)
-  TRANSACTION_MAX: 20,
+  // Dual-rail transaction scoring: behavior-based trust, not payment verification
+  HEDERA_TX_BONUS: 2,      // per Hedera-settled transaction (on-chain, immutable proof)
+  STRIPE_TX_BONUS: 1,      // per Stripe-settled transaction (off-chain but verified, lower weight)
+  TRANSACTION_MAX: 20,     // combined cap across both rails
 } as const;
 
 // Trust level thresholds
@@ -3551,6 +3571,7 @@ export const TRUST_LEVELS: Array<{ minScore: number; level: string }> = [
   { minScore: 25,  level: 'verified' },     // email + 1 social
   { minScore: 50,  level: 'trusted' },      // email + social + govt OR multiple socials
   { minScore: 80,  level: 'premium' },      // all layers + history
+  { minScore: 105, level: 'elite' },        // full verification + sustained transactional history + account age
 ];
 
 function mapVerificationRow(row: any): VerificationRecord {
@@ -3583,6 +3604,8 @@ function mapTrustScoreRow(row: any): TrustScoreRecord {
     socialVerified: row.social_verified,
     documentVerified: row.document_verified,
     transactionCount: row.transaction_count,
+    hederaTxCount: row.hedera_tx_count ?? 0,
+    stripeTxCount: row.stripe_tx_count ?? 0,
     accountAgeDays: row.account_age_days,
     lastComputedAt: row.last_computed_at,
   };
@@ -3707,11 +3730,21 @@ export function computeAndStoreTrustScore(userId: string): TrustScoreRecord {
   else if (accountAgeDays >= 90) totalScore += TRUST_POINTS.ACCOUNT_AGE_90D;
   else if (accountAgeDays >= 30) totalScore += TRUST_POINTS.ACCOUNT_AGE_30D;
 
-  // 5. Transaction history bonus
-  const txCount = (db.prepare(
-    "SELECT COUNT(*) as cnt FROM marketplace_orders WHERE (buyer_id = ? OR seller_id = ?) AND status IN ('completed', 'settled')"
+  // 5. Dual-rail transaction history bonus
+  //    Hedera-settled = 2 pts each (on-chain, immutable proof of delivery)
+  //    Stripe-settled = 1 pt each  (off-chain but payment-verified)
+  //    Combined cap: 20 pts — rewards sustained behavior, not payment verification alone
+  const hederaTxCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM marketplace_orders WHERE (buyer_id = ? OR seller_id = ?) AND status IN ('completed', 'settled') AND settlement_type = 'hedera'"
   ).get(userId, userId) as any).cnt;
-  const txPoints = Math.min(txCount * TRUST_POINTS.TRANSACTION_BONUS, TRUST_POINTS.TRANSACTION_MAX);
+  const stripeTxCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM marketplace_orders WHERE (buyer_id = ? OR seller_id = ?) AND status IN ('completed', 'settled') AND settlement_type = 'stripe'"
+  ).get(userId, userId) as any).cnt;
+  const txCount = hederaTxCount + stripeTxCount;
+
+  const hederaPoints = hederaTxCount * TRUST_POINTS.HEDERA_TX_BONUS;
+  const stripePoints = stripeTxCount * TRUST_POINTS.STRIPE_TX_BONUS;
+  const txPoints = Math.min(hederaPoints + stripePoints, TRUST_POINTS.TRANSACTION_MAX);
   totalScore += txPoints;
 
   // Determine trust level
@@ -3722,8 +3755,8 @@ export function computeAndStoreTrustScore(userId: string): TrustScoreRecord {
 
   // Upsert trust score
   db.prepare(`
-    INSERT INTO user_trust_scores (user_id, total_score, trust_level, email_verified, social_verified, document_verified, transaction_count, account_age_days, last_computed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO user_trust_scores (user_id, total_score, trust_level, email_verified, social_verified, document_verified, transaction_count, hedera_tx_count, stripe_tx_count, account_age_days, last_computed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id) DO UPDATE SET
       total_score = excluded.total_score,
       trust_level = excluded.trust_level,
@@ -3731,9 +3764,11 @@ export function computeAndStoreTrustScore(userId: string): TrustScoreRecord {
       social_verified = excluded.social_verified,
       document_verified = excluded.document_verified,
       transaction_count = excluded.transaction_count,
+      hedera_tx_count = excluded.hedera_tx_count,
+      stripe_tx_count = excluded.stripe_tx_count,
       account_age_days = excluded.account_age_days,
       last_computed_at = excluded.last_computed_at
-  `).run(userId, totalScore, trustLevel, emailVerified, socialCount, docVerified > 0 ? 1 : 0, txCount, accountAgeDays, now);
+  `).run(userId, totalScore, trustLevel, emailVerified, socialCount, docVerified > 0 ? 1 : 0, txCount, hederaTxCount, stripeTxCount, accountAgeDays, now);
 
   return {
     userId,
@@ -3743,6 +3778,8 @@ export function computeAndStoreTrustScore(userId: string): TrustScoreRecord {
     socialVerified: socialCount,
     documentVerified: docVerified > 0 ? 1 : 0,
     transactionCount: txCount,
+    hederaTxCount,
+    stripeTxCount,
     accountAgeDays,
     lastComputedAt: now,
   };
