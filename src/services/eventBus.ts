@@ -458,7 +458,7 @@ export function initNotificationListeners(): void {
             icon: 'dollar',
             link: `/dashboard/orders`,
           });
-          pushToUser(sellerId, { type: 'notification', ...notif });
+          pushToUser(sellerId, { event: 'notification', ...notif });
         }
       }
     } catch (err: any) {
@@ -482,7 +482,7 @@ export function initNotificationListeners(): void {
             icon: 'truck',
             link: `/dashboard/orders`,
           });
-          pushToUser(buyerId, { type: 'notification', ...notif });
+          pushToUser(buyerId, { event: 'notification', ...notif });
         }
       }
     } catch (err: any) {
@@ -511,7 +511,7 @@ export function initNotificationListeners(): void {
             icon: 'check-circle',
             link: `/dashboard/orders`,
           });
-          pushToUser(uid, { type: 'notification', ...notif });
+          pushToUser(uid, { event: 'notification', ...notif });
         }
       }
     } catch (err: any) {
@@ -536,7 +536,7 @@ export function initNotificationListeners(): void {
             icon: 'shield',
             link: `/dashboard/trust`,
           });
-          pushToUser(userId, { type: 'notification', ...notif });
+          pushToUser(userId, { event: 'notification', ...notif });
         }
       }
     } catch (err: any) {
@@ -562,7 +562,7 @@ export function initNotificationListeners(): void {
             icon: 'star',
             link: `/dashboard/settings`,
           });
-          pushToUser(userId, { type: 'notification', ...notif });
+          pushToUser(userId, { event: 'notification', ...notif });
         }
       }
     } catch (err: any) {
@@ -586,7 +586,7 @@ export function initNotificationListeners(): void {
             icon: 'alert-triangle',
             link: `/dashboard/settings`,
           });
-          pushToUser(userId, { type: 'notification', ...notif });
+          pushToUser(userId, { event: 'notification', ...notif });
         }
       }
     } catch (err: any) {
@@ -614,7 +614,7 @@ export function initNotificationListeners(): void {
           icon: 'star',
           link: `/dashboard/bots`,
         });
-        pushToUser(bot.owner_id, { type: 'notification', ...notif });
+        pushToUser(bot.owner_id, { event: 'notification', ...notif });
       }
     } catch (err: any) {
       logger.error('Bot rating notification error', { error: err.message });
@@ -640,7 +640,7 @@ export function initNotificationListeners(): void {
           icon: 'message-circle',
           link: `/dashboard/support`,
         });
-        pushToUser(thread.user_id, { type: 'notification', ...notif });
+        pushToUser(thread.user_id, { event: 'notification', ...notif });
       }
     } catch (err: any) {
       logger.error('Support notification error', { error: err.message });
