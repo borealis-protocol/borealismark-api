@@ -118,8 +118,8 @@ router.get('/services', async (req: Request, res: Response) => {
       capability: req.query.capability,
       minTrust: req.query.minTrust ? Number(req.query.minTrust) : undefined,
       maxPrice: req.query.maxPrice ? Number(req.query.maxPrice) : undefined,
-      page: req.query.page ? Number(req.query.page) : 1,
-      limit: req.query.limit ? Number(req.query.limit) : 20,
+      page: Math.max(1, req.query.page ? Number(req.query.page) : 1),
+      limit: Math.min(100, Math.max(1, req.query.limit ? Number(req.query.limit) : 20)),
     });
 
     let query = `SELECT * FROM terminal_services WHERE status = 'active'`;

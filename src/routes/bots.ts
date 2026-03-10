@@ -305,8 +305,8 @@ router.get('/leaderboard', (req: Request, res: Response) => {
 
     res.json({ success: true, data });
   } catch (err: any) {
-    logger.error('Get leaderboard error', { error: err.message, stack: err.stack });
-    res.status(500).json({ success: false, error: 'Failed to get leaderboard', details: err.message });
+    logger.error('Get leaderboard error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to get leaderboard' });
   }
 });
 
@@ -327,8 +327,8 @@ router.get('/stats', (req: Request, res: Response) => {
       },
     });
   } catch (err: any) {
-    logger.error('Get stats error', { error: err.message, stack: err.stack });
-    res.status(500).json({ success: false, error: 'Failed to get stats', details: err.message });
+    logger.error('Get stats error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to get stats' });
   }
 });
 

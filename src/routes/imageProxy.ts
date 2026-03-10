@@ -235,7 +235,6 @@ router.get('/proxy', async (req: Request, res: Response) => {
       res.status(502).json({
         success: false,
         error: 'Failed to fetch image from external source',
-        details: err.message,
       });
     }
   } catch (err: any) {
