@@ -12,6 +12,7 @@ import { logger } from '../middleware/logger';
 
 // CRITICAL: Use verified custom domain for outbound email — NEVER *.cloudflare.dev or *.workers.dev
 const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'BorealisMark <support@borealisprotocol.ai>';
+const VERIFY_FROM_ADDRESS = process.env.VERIFY_EMAIL_FROM ?? 'Borealis Terminal Verification <verify@borealisprotocol.ai>';
 
 // Safety: validate FROM address at startup — block .dev domains
 if (FROM_ADDRESS.includes('.workers.dev') || FROM_ADDRESS.includes('.pages.dev') || FROM_ADDRESS.includes('cloudflare.dev')) {
@@ -78,7 +79,7 @@ export async function sendPasswordResetEmail(
       <p class="small link">${resetLink}</p>
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification on Hedera
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification
     </div>
   </div>
 </body>
@@ -173,7 +174,7 @@ export async function sendVerificationEmail(
       <p class="small link">${verifyLink}</p>
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification on Hedera
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification
     </div>
   </div>
 </body>
@@ -202,7 +203,7 @@ This link will expire in 24 hours. If you didn't create this account, you can sa
 
   try {
     const result = await getResend().emails.send({
-      from: FROM_ADDRESS,
+      from: VERIFY_FROM_ADDRESS,
       to: [toEmail],
       subject: 'Verify your BorealisMark email address',
       html,
@@ -286,7 +287,7 @@ export async function sendSubscriptionExpiryReminder(
       <p class="small">Pay with USDC on Hedera and save 5% on your renewal. Your BM Scores, badges, and audit history are always preserved regardless of plan.</p>
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification on Hedera
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification
     </div>
   </div>
 </body>
@@ -376,7 +377,7 @@ export async function sendDowngradeNotificationEmail(
       <p class="small">Your BM Scores, certifications, AP history, and badges are always preserved regardless of plan changes.</p>
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification on Hedera
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification
     </div>
   </div>
 </body>
