@@ -173,14 +173,27 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
     // Hash password and create user
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const userId = uuid();
-    createUser(userId, email, passwordHash, name);
+
+    try {
+      createUser(userId, email, passwordHash, name);
+    } catch (dbErr: any) {
+      logger.error('User creation failed', { email, error: dbErr.message });
+      res.status(500).json({ success: false, error: 'Failed to create user account' });
+      return;
+    }
 
     // Generate JWT (user can log in but will see verification gate)
     const token = signToken(userId, email, 'standard');
 
-    // Send verification email
-    const verifyToken = createEmailVerificationToken(userId, email);
-    const emailSent = await sendVerificationEmail(email, verifyToken, name);
+    // Send verification email (non-blocking — don't fail registration if email fails)
+    let emailSent = false;
+    try {
+      const verifyToken = createEmailVerificationToken(userId, email);
+      emailSent = await sendVerificationEmail(email, verifyToken, name);
+    } catch (emailErr: any) {
+      logger.error('Verification email failed', { userId, email, error: emailErr.message });
+      // Continue anyway — user can request resend later
+    }
 
     logger.info('User registered', { userId, email, verificationEmailSent: emailSent });
     eventBus.userRegistered(userId, email, name);

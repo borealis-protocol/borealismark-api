@@ -282,6 +282,27 @@ router.post('/listings', requireAuth, async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /v1/marketplace/category-counts — Get listing counts per category
+ */
+router.get('/category-counts', async (_req: Request, res: Response) => {
+  try {
+    const rows = getDb().prepare(
+      `SELECT category, COUNT(*) as count FROM marketplace_listings WHERE status = 'published' GROUP BY category ORDER BY count DESC`
+    ).all() as Array<{ category: string; count: number }>;
+
+    const total = rows.reduce((sum, r) => sum + r.count, 0);
+
+    res.json({
+      success: true,
+      data: { total, categories: rows },
+    });
+  } catch (err: any) {
+    logger.error('Category counts error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to load category counts' });
+  }
+});
+
+/**
  * GET /v1/marketplace/listings — Browse published listings
  */
 router.get('/listings', async (req: Request, res: Response) => {

@@ -579,7 +579,8 @@ router.get('/status', requireAuth, (req: Request, res: Response) => {
 });
 
 function getNextLevel(currentScore: number): { level: string; pointsNeeded: number } | null {
-  for (let i = TRUST_LEVELS.length - 1; i >= 0; i--) {
+  // Iterate forward through levels to find the NEXT achievable level
+  for (let i = 0; i < TRUST_LEVELS.length; i++) {
     if (currentScore < TRUST_LEVELS[i].minScore) {
       return {
         level: TRUST_LEVELS[i].level,
