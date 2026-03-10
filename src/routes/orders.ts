@@ -451,7 +451,7 @@ router.post('/orders/:id/verify-buyer-payment', requireAuth, async (req: Request
             buyerName: buyerUser?.name ?? 'Buyer',
             sellerName: sellerUser.name ?? sellerUser.email,
             bondUsdc,
-            memo: sellerDep?.memo ?? `order-seller-${orderId}`,
+            memo: (sellerDep?.memo as string) ?? `order-seller-${orderId}`,
             treasuryAccountId: TREASURY_ACCOUNT_ID,
           },
         ).catch(err => logger.error('Failed to send seller deposit email', { error: err.message }));
