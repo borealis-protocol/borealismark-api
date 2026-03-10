@@ -52,7 +52,8 @@ const ALLOWED_CONTENT_TYPES: Record<UploadCategory, string[]> = {
 
 // ─── Client Management ────────────────────────────────────────────────────
 
-let s3Client: S3Client | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- AWS SDK v3 generic types cause TS resolution issues with send()
+let s3Client: any = null;
 
 /**
  * Check if R2 storage is enabled by verifying all required environment variables.
@@ -70,9 +71,9 @@ export function isR2Enabled(): boolean {
 /**
  * Get or initialize the S3 client for R2.
  * Returns null if R2 is not configured.
- * @returns S3Client or null
+ * @returns S3-compatible client or null
  */
-export function getR2Client(): S3Client | null {
+export function getR2Client(): any {
   if (!isR2Enabled()) return null;
 
   if (!s3Client) {

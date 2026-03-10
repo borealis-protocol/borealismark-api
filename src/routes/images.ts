@@ -9,35 +9,13 @@
  *   R2_PUBLIC_URL (e.g., https://images.borealismark.com)
  */
 import { Router } from 'express';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { requireApiKey, requireScope } from '../middleware/auth';
 import { logger } from '../middleware/logger';
 import type { AuthenticatedRequest } from '../middleware/auth';
+import { isR2Enabled, getR2Client } from '../services/r2Storage';
 
 const router = Router();
-
-// Check if R2 is configured
-function isR2Enabled(): boolean {
-  return !!(
-    process.env.R2_ACCOUNT_ID &&
-    process.env.R2_ACCESS_KEY_ID &&
-    process.env.R2_SECRET_ACCESS_KEY &&
-    process.env.R2_BUCKET_NAME
-  );
-}
-
-// Initialize S3 client for R2 (only if configured)
-function getR2Client(): S3Client | null {
-  if (!isR2Enabled()) return null;
-  return new S3Client({
-    region: 'auto',
-    endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-    },
-  });
-}
 
 // POST /v1/images/upload — Upload image to R2
 router.post('/upload', requireApiKey, requireScope('write'), async (req, res) => {
