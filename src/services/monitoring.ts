@@ -33,7 +33,10 @@ export function getDetailedHealth(): HealthStatus {
   const checks: HealthStatus['checks'] = {
     database: { status: 'unknown', latencyMs: 0, backend: 'sqlite' },
     hedera: {
-      configured: !!(process.env.HEDERA_ACCOUNT_ID && process.env.HEDERA_PRIVATE_KEY),
+      configured: !!(
+        (process.env.HEDERA_GAS_ACCOUNT_ID || process.env.HEDERA_ACCOUNT_ID) &&
+        (process.env.HEDERA_GAS_PRIVATE_KEY || process.env.HEDERA_PRIVATE_KEY)
+      ),
       network: process.env.HEDERA_NETWORK || null,
     },
     stripe: {

@@ -100,9 +100,9 @@ export async function anchorEventBatch(): Promise<{
   const merkleRoot = computeMerkleRoot(events);
   const eventIds = events.map(e => e.id);
 
-  // Check if Hedera is configured
-  const accountId = process.env.HEDERA_ACCOUNT_ID;
-  const privateKey = process.env.HEDERA_PRIVATE_KEY;
+  // Use Gas wallet for HCS anchoring (falls back to legacy account)
+  const accountId = process.env.HEDERA_GAS_ACCOUNT_ID ?? process.env.HEDERA_ACCOUNT_ID;
+  const privateKey = process.env.HEDERA_GAS_PRIVATE_KEY ?? process.env.HEDERA_PRIVATE_KEY;
   const dataTopicId = process.env.HEDERA_DATA_TOPIC_ID ?? process.env.HEDERA_AUDIT_TOPIC_ID;
 
   if (!accountId || !privateKey || !dataTopicId) {
@@ -230,9 +230,9 @@ export async function retryFailedAnchoring(): Promise<{
   const merkleRoot = computeMerkleRoot(failedEvents);
   const eventIds = failedEvents.map(e => e.id);
 
-  // Check if Hedera is configured
-  const accountId = process.env.HEDERA_ACCOUNT_ID;
-  const privateKey = process.env.HEDERA_PRIVATE_KEY;
+  // Use Gas wallet for HCS anchoring (falls back to legacy account)
+  const accountId = process.env.HEDERA_GAS_ACCOUNT_ID ?? process.env.HEDERA_ACCOUNT_ID;
+  const privateKey = process.env.HEDERA_GAS_PRIVATE_KEY ?? process.env.HEDERA_PRIVATE_KEY;
   const dataTopicId = process.env.HEDERA_DATA_TOPIC_ID ?? process.env.HEDERA_AUDIT_TOPIC_ID;
 
   if (!accountId || !privateKey || !dataTopicId) {

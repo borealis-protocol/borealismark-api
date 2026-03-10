@@ -153,9 +153,9 @@ router.post('/penalize', requireApiKey, requireScope('audit'), slashLimiter, val
   const penaltyId = uuidv4();
   let hcsTxId: string | undefined;
 
-  // Submit penalty event to Hedera if configured
-  const accountId = process.env.HEDERA_ACCOUNT_ID;
-  const privateKey = process.env.HEDERA_PRIVATE_KEY;
+  // Submit penalty event to Hedera using Gas wallet
+  const accountId = process.env.HEDERA_GAS_ACCOUNT_ID ?? process.env.HEDERA_ACCOUNT_ID;
+  const privateKey = process.env.HEDERA_GAS_PRIVATE_KEY ?? process.env.HEDERA_PRIVATE_KEY;
   const topicId = process.env.HEDERA_AUDIT_TOPIC_ID;
 
   if (accountId && privateKey && topicId) {

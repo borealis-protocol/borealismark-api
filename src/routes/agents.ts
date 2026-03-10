@@ -199,8 +199,8 @@ router.post('/audit', requireApiKey, requireScope('audit'), auditLimiter, valida
     });
 
     // ── Attempt Hedera HCS submission ─────────────────────────────────────────
-    const accountId = process.env.HEDERA_ACCOUNT_ID;
-    const privateKey = process.env.HEDERA_PRIVATE_KEY;
+    const accountId = process.env.HEDERA_GAS_ACCOUNT_ID ?? process.env.HEDERA_ACCOUNT_ID;
+    const privateKey = process.env.HEDERA_GAS_PRIVATE_KEY ?? process.env.HEDERA_PRIVATE_KEY;
     let topicId = process.env.HEDERA_AUDIT_TOPIC_ID;
 
     if (accountId && privateKey) {
@@ -630,8 +630,8 @@ router.post('/my/:id/audit', requireAuth, auditLimiter, async (req, res) => {
     });
 
     // Try HCS anchoring
-    const accountId = process.env.HEDERA_ACCOUNT_ID;
-    const privateKey = process.env.HEDERA_PRIVATE_KEY;
+    const accountId = process.env.HEDERA_GAS_ACCOUNT_ID ?? process.env.HEDERA_ACCOUNT_ID;
+    const privateKey = process.env.HEDERA_GAS_PRIVATE_KEY ?? process.env.HEDERA_PRIVATE_KEY;
     let topicId = process.env.HEDERA_AUDIT_TOPIC_ID;
 
     if (accountId && privateKey) {
@@ -794,8 +794,8 @@ router.post('/audit/:auditRequestId/accept', requireApiKey, requireScope('audit'
     updateAuditRequestStatus(auditRequestId, 'accepted', signature);
 
     // Try to anchor AUDIT_COMMITMENT on HCS
-    const accountId = process.env.HEDERA_ACCOUNT_ID;
-    const privateKey = process.env.HEDERA_PRIVATE_KEY;
+    const accountId = process.env.HEDERA_GAS_ACCOUNT_ID ?? process.env.HEDERA_ACCOUNT_ID;
+    const privateKey = process.env.HEDERA_GAS_PRIVATE_KEY ?? process.env.HEDERA_PRIVATE_KEY;
     let topicId = process.env.HEDERA_AUDIT_TOPIC_ID;
 
     if (accountId && privateKey) {

@@ -37,10 +37,12 @@ import {
 export const USDC_TOKEN_ID = process.env.HEDERA_USDC_TOKEN_ID ?? '0.0.456858';
 export const USDC_DECIMALS = 6;
 
-// Treasury account that receives payments
-// Falls back to the operator account; crashes clearly if neither is set
+// Treasury account that receives USDC payments (subscriptions, platform fees)
+// Uses Operations Treasury → falls back to legacy HEDERA_TREASURY_ACCOUNT_ID → HEDERA_ACCOUNT_ID
 export const TREASURY_ACCOUNT_ID: string = (() => {
-  const id = process.env.HEDERA_TREASURY_ACCOUNT_ID ?? process.env.HEDERA_ACCOUNT_ID;
+  const id = process.env.HEDERA_OPS_ACCOUNT_ID
+    ?? process.env.HEDERA_TREASURY_ACCOUNT_ID
+    ?? process.env.HEDERA_ACCOUNT_ID;
   if (!id || id === '0.0.0') {
     // Don't fail at import time — the module is loaded even when USDC is unused.
     // verifyUsdcPayment() and createUsdcInvoice() will check at call time.
@@ -391,14 +393,15 @@ export async function anchorPaymentReceiptOnHCS(
       throw new Error(`HEDERA_NETWORK must be 'testnet' or 'mainnet', got: ${networkEnv}`);
     }
 
+    // Use Gas wallet for HCS operations (falls back to legacy account)
     const config: HCSConfig = {
-      accountId: process.env.HEDERA_ACCOUNT_ID ?? '',
-      privateKey: process.env.HEDERA_PRIVATE_KEY ?? '',
+      accountId: process.env.HEDERA_GAS_ACCOUNT_ID ?? process.env.HEDERA_ACCOUNT_ID ?? '',
+      privateKey: process.env.HEDERA_GAS_PRIVATE_KEY ?? process.env.HEDERA_PRIVATE_KEY ?? '',
       network: networkEnv as 'testnet' | 'mainnet',
     };
 
     if (!config.accountId || !config.privateKey) {
-      logger.warn('Hedera credentials not configured — skipping HCS anchoring');
+      logger.warn('Hedera Gas wallet not configured — skipping HCS anchoring');
       return null;
     }
 
