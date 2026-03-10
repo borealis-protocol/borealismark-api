@@ -33,10 +33,17 @@ import {
   confirmEscrowDeposit,
   settleEscrowDeposits,
   getUserById,
+  computeAndStoreTrustScore,
+  getTrustScore,
 } from '../db/database';
 import { convertCadToUsdc, getConversionRate, roundUsdc } from '../services/exchangeRates';
 import { TREASURY_ACCOUNT_ID, USDC_TOKEN_ID } from '../hedera/usdc';
 import { logger } from '../middleware/logger';
+import {
+  sendSellerDepositRequestEmail,
+  sendShippedEmail,
+  sendSettlementCompleteEmail,
+} from '../services/email';
 
 const router = Router();
 
@@ -425,7 +432,33 @@ router.post('/orders/:id/verify-buyer-payment', requireAuth, async (req: Request
       amount: buyerDeposit.amount_usdc,
     });
 
-    // TODO: Send email to seller requesting their 25% bond deposit
+    // v39: Send email to seller requesting their 25% bond deposit + buyer trust score
+    try {
+      const sellerUser = getUserById(order.seller_id as string);
+      const buyerUser = getUserById(user.sub);
+      if (sellerUser) {
+        const listing = getDb().prepare('SELECT title, price_cad FROM marketplace_listings WHERE id = ?').get(order.listing_id) as any;
+        const sellerDeposits = getEscrowDeposits(orderId);
+        const sellerDep = sellerDeposits.find(d => d.party === 'seller');
+        const bondUsdc = sellerDep ? (sellerDep.amount_usdc as number) : (buyerDeposit.amount_usdc as number) * 0.25;
+        sendSellerDepositRequestEmail(
+          sellerUser.email,
+          {
+            orderId,
+            listingTitle: listing?.title ?? 'Marketplace Item',
+            totalCad: listing?.price_cad ?? 0,
+            totalUsdc: buyerDeposit.amount_usdc as number,
+            buyerName: buyerUser?.name ?? 'Buyer',
+            sellerName: sellerUser.name ?? sellerUser.email,
+            bondUsdc,
+            memo: sellerDep?.memo ?? `order-seller-${orderId}`,
+            treasuryAccountId: TREASURY_ACCOUNT_ID,
+          },
+        ).catch(err => logger.error('Failed to send seller deposit email', { error: err.message }));
+      }
+    } catch (emailErr: any) {
+      logger.error('Seller deposit email error', { error: emailErr.message });
+    }
 
     res.json({
       success: true,
@@ -701,7 +734,29 @@ router.post('/orders/:id/ship', requireAuth, (req: Request, res: Response) => {
 
   logger.info('Order shipped', { orderId, carrier, trackingNumber });
 
-  // TODO: Send email to buyer with tracking info
+  // v39: Send email to buyer with tracking info
+  try {
+    const buyerUser = getUserById(order.buyer_id as string);
+    const sellerUser = getUserById(order.seller_id as string);
+    if (buyerUser) {
+      const listing = getDb().prepare('SELECT title, price_cad FROM marketplace_listings WHERE id = ?').get(order.listing_id) as any;
+      sendShippedEmail(
+        buyerUser.email,
+        {
+          orderId,
+          listingTitle: listing?.title ?? 'Marketplace Item',
+          totalCad: listing?.price_cad ?? 0,
+          totalUsdc: order.total_usdc as number,
+          buyerName: buyerUser.name ?? buyerUser.email,
+          sellerName: sellerUser?.name ?? 'Seller',
+          carrier: carrier || 'Other',
+          trackingNumber,
+        },
+      ).catch(err => logger.error('Failed to send shipped email', { error: err.message }));
+    }
+  } catch (emailErr: any) {
+    logger.error('Shipped email error', { error: emailErr.message });
+  }
 
   res.json({
     success: true,
@@ -982,7 +1037,52 @@ async function settleOrder(orderId: string): Promise<{
     hcsAnchored: !!hcsProof,
   });
 
-  // TODO: Send settlement emails to both parties
+  // v39: Award trust points to both buyer and seller (+2 each)
+  try {
+    const buyerTrust = computeAndStoreTrustScore(order.buyer_id as string);
+    const sellerTrust = computeAndStoreTrustScore(order.seller_id as string);
+    logger.info('Trust scores updated on settlement', {
+      orderId,
+      buyerScore: buyerTrust.totalScore,
+      buyerLevel: buyerTrust.trustLevel,
+      sellerScore: sellerTrust.totalScore,
+      sellerLevel: sellerTrust.trustLevel,
+    });
+  } catch (trustErr: any) {
+    logger.error('Trust score update failed on settlement', { error: trustErr.message, orderId });
+  }
+
+  // v39: Send settlement emails to both parties
+  try {
+    const buyer = getUserById(order.buyer_id as string);
+    const listing = getDb().prepare('SELECT title, price_cad FROM marketplace_listings WHERE id = ?').get(order.listing_id) as any;
+    const emailData = {
+      orderId,
+      listingTitle: listing?.title ?? 'Marketplace Item',
+      totalCad: listing?.price_cad ?? 0,
+      totalUsdc: totalUsdc,
+      buyerName: buyer?.name ?? buyer?.email ?? 'Buyer',
+      sellerName: seller?.name ?? seller?.email ?? 'Seller',
+      hederaTransactionId: hcsProof ? `settlement-${orderId}` : undefined,
+    };
+    if (buyer) {
+      sendSettlementCompleteEmail(buyer.email, {
+        ...emailData,
+        isSeller: false,
+      }).catch(err => logger.error('Failed to send buyer settlement email', { error: err.message }));
+    }
+    if (seller) {
+      sendSettlementCompleteEmail(seller.email, {
+        ...emailData,
+        isSeller: true,
+        sellerPayout,
+        sellerBondReturned,
+        platformFee,
+      }).catch(err => logger.error('Failed to send seller settlement email', { error: err.message }));
+    }
+  } catch (emailErr: any) {
+    logger.error('Settlement email error', { error: emailErr.message });
+  }
 
   return {
     orderStatus: 'completed',
