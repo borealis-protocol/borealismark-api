@@ -1951,7 +1951,9 @@ router.get('/listings/:id/likes', async (req: Request, res: Response) => {
     if (authHeader?.startsWith('Bearer ')) {
       try {
         const jwt = require('jsonwebtoken');
-        const decoded = jwt.verify(authHeader.slice(7), process.env.JWT_SECRET || 'borealis-jwt-secret-2026') as any;
+        const jwtSecret = process.env.JWT_SECRET;
+        if (!jwtSecret) throw new Error('JWT_SECRET not configured');
+        const decoded = jwt.verify(authHeader.slice(7), jwtSecret) as any;
         userId = decoded.sub;
       } catch (_) { /* not authenticated, that's fine */ }
     }
