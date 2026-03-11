@@ -311,7 +311,7 @@ router.post('/checkout', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: 'Failed to create checkout session',
-      detail: err.message,
+      detail: err.code === 'resource_missing' ? 'Stripe price ID not found — check STRIPE_ELITE_PRICE_ID env var' : undefined,
       stripeCode: err.code,
       timestamp: Date.now(),
     });
