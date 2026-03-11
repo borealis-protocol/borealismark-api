@@ -86,6 +86,40 @@ const planToTier: Record<string, 'standard' | 'pro' | 'elite'> = {
   enterprise: 'elite',
 };
 
+// ─── GET /v1/payments/debug-price/:planId ─────────────────────────────────────
+// Temporary diagnostic: retrieve Stripe price object to diagnose checkout failures
+
+router.get('/debug-price/:planId', async (req: Request, res: Response) => {
+  try {
+    const plan = ALL_PLANS[req.params.planId];
+    if (!plan) return res.status(404).json({ error: 'Unknown plan', planId: req.params.planId });
+
+    const { getStripe } = await import('../stripe/client');
+    const stripe = getStripe();
+    const price = await stripe.prices.retrieve(plan.priceId, { expand: ['product'] });
+
+    res.json({
+      success: true,
+      planId: req.params.planId,
+      configPriceId: plan.priceId,
+      stripePrice: {
+        id: price.id,
+        active: price.active,
+        type: price.type,
+        unitAmount: price.unit_amount,
+        currency: price.currency,
+        recurringInterval: price.recurring?.interval,
+        recurringUsageType: price.recurring?.usage_type,
+        productId: typeof price.product === 'string' ? price.product : (price.product as any)?.id,
+        productActive: typeof price.product !== 'string' ? (price.product as any)?.active : undefined,
+        productName: typeof price.product !== 'string' ? (price.product as any)?.name : undefined,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message, code: err.code, type: err.type });
+  }
+});
+
 // ─── GET /v1/payments/plans ──────────────────────────────────────────────────
 // Public: List all available plans with pricing + accepted payment methods
 
