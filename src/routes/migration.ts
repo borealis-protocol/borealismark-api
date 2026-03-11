@@ -111,10 +111,10 @@ router.post('/import', requireAuth, async (req: Request, res: Response) => {
 
       // Trust gate check
       const trustData = computeAndStoreTrustScore(userId);
-      if (trustData.points < (service.min_trust_score || 0)) {
+      if (trustData.totalScore < (service.min_trust_score || 0)) {
         return res.status(403).json({
           success: false,
-          error: `This service tier requires a trust score of at least ${service.min_trust_score}. Your current score: ${trustData.points}`,
+          error: `This service tier requires a trust score of at least ${service.min_trust_score}. Your current score: ${trustData.totalScore}`,
         });
       }
     }
