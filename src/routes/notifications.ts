@@ -70,7 +70,7 @@ export function getSSEClientCount(): number {
 
 router.get('/', requireAuth, (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user.sub;
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
     const offset = Math.max(0, Number(req.query.offset) || 0);
     const unreadOnly = req.query.unread === 'true';
@@ -96,7 +96,7 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
 
 router.get('/count', requireAuth, (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user.sub;
     const unreadCount = getUnreadNotificationCount(userId);
     res.json({ success: true, data: { unreadCount } });
   } catch (err: any) {
@@ -174,7 +174,7 @@ router.get('/stream', (req: Request, res: Response) => {
 
 router.patch('/:id/read', requireAuth, (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user.sub;
     const success = markNotificationRead(req.params.id, userId);
 
     if (!success) {
@@ -193,7 +193,7 @@ router.patch('/:id/read', requireAuth, (req: Request, res: Response) => {
 
 router.post('/read-all', requireAuth, (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user.sub;
     const count = markAllNotificationsRead(userId);
 
     // Push updated count to SSE clients
@@ -210,7 +210,7 @@ router.post('/read-all', requireAuth, (req: Request, res: Response) => {
 
 router.get('/preferences', requireAuth, (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user.sub;
     const prefs = getNotificationPreferences(userId);
     res.json({ success: true, data: prefs });
   } catch (err: any) {
@@ -223,7 +223,7 @@ router.get('/preferences', requireAuth, (req: Request, res: Response) => {
 
 router.patch('/preferences', requireAuth, (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user.sub;
     const allowed = [
       'emailOrders', 'emailVerification', 'emailPayment', 'emailSystem', 'emailMarketing',
       'inappOrders', 'inappVerification', 'inappPayment', 'inappSystem', 'inappTrust', 'inappSupport',
@@ -265,7 +265,7 @@ router.get('/push/vapid-key', (_req: Request, res: Response) => {
 
 router.post('/push/subscribe', requireAuth, (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId;
+    const userId = (req as any).user.sub;
     const { subscription } = req.body;
 
     if (!subscription || !subscription.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) {

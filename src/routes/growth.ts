@@ -19,7 +19,7 @@ const router = Router();
 
 // Admin check middleware
 function requireAdmin(req: Request, res: Response, next: Function): void {
-  const user = getDb().prepare('SELECT role FROM users WHERE id = ?').get((req as any).userId) as any;
+  const user = getDb().prepare('SELECT role FROM users WHERE id = ?').get((req as any).user?.sub) as any;
   if (!user || user.role !== 'admin') {
     res.status(403).json({ success: false, error: 'Admin access required' });
     return;
