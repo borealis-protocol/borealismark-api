@@ -47,7 +47,7 @@ export const AGENT_PLANS: Record<string, StripePlan> = {
   elite: {
     name: 'BorealisMark Elite',
     productId: process.env.STRIPE_ELITE_PRODUCT_ID ?? 'prod_U75kbvUp2uKsCR',
-    priceId: process.env.STRIPE_ELITE_PRICE_ID ?? 'price_1T8rZ8J5qkaENvhU4ltxismU',
+    priceId: process.env.STRIPE_ELITE_PRICE_ID ?? 'price_1T8rZ8J5qkaENvhU4ItxismU',
     amount: 34900,
     currency: 'usd',
     interval: 'year',
