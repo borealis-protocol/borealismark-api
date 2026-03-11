@@ -483,8 +483,30 @@ router.get('/listings', async (req: Request, res: Response) => {
       success: true,
       data: {
         listings: listings.map(l => {
-          const trustLevel = l.seller_trust_level || 'unverified';
+          // Auto-compute trust score if missing for this seller
+          let trustLevel = l.seller_trust_level || 'unverified';
+          let trustScore = l.seller_trust_score || 0;
+          if (!l.seller_trust_level && l.user_id) {
+            try {
+              const computed = computeAndStoreTrustScore(l.user_id);
+              trustLevel = computed.trustLevel;
+              trustScore = computed.totalScore;
+            } catch (_e) { /* non-critical */ }
+          }
+
+          // Derive verified status from tier + email + trust level
+          const tier = l.seller_tier || 'standard';
+          const isVerified = (tier === 'pro' || tier === 'elite') || !!l.seller_email_verified || trustLevel !== 'unverified';
+
           const trustBoost = getTrustBoost(trustLevel);
+
+          // Count seller's active listings (lightweight — cached per request context)
+          let sellerListingCount = 0;
+          try {
+            const countResult = getDb().prepare('SELECT COUNT(*) as cnt FROM marketplace_listings WHERE user_id = ? AND status = ?').get(l.user_id, 'active') as any;
+            sellerListingCount = countResult?.cnt || 0;
+          } catch (_e) { /* non-critical */ }
+
           return {
             id: l.id,
             userId: l.user_id,
@@ -504,15 +526,18 @@ router.get('/listings', async (req: Request, res: Response) => {
             externalSource: l.external_source,
             sellerName: l.seller_name,
             sellerId: l.user_id,
-            sellerTier: l.seller_tier || 'standard',
-            sellerVerified: (l.seller_tier === 'pro' || l.seller_tier === 'elite') || !!l.seller_email_verified,
+            sellerTier: tier,
+            sellerVerified: isVerified,
             sellerAge: l.seller_created_at ? Math.floor((Date.now() - l.seller_created_at) / 86400000) : 0,
+            sellerMemberSince: l.seller_created_at || null,
+            sellerListingCount: sellerListingCount,
             sellerTrustLevel: trustLevel,
-            sellerTrustScore: l.seller_trust_score || 0,
+            sellerTrustScore: trustScore,
             sellerStorefront: l.seller_store_name ? {
               name: l.seller_store_name,
               slug: l.seller_store_slug,
             } : null,
+            sellerEmailVerified: !!l.seller_email_verified,
             trustBoost,
             likeCount: l.like_count || 0,
             viewCount: l.view_count,
@@ -592,7 +617,7 @@ router.get('/listings/my', requireAuth, async (req: Request, res: Response) => {
 router.get('/listings/:id', async (req: Request, res: Response) => {
   try {
     const listing = getDb().prepare(`
-      SELECT l.*, u.name as seller_name, u.tier as seller_tier, u.created_at as seller_created_at,
+      SELECT l.*, u.name as seller_name, u.tier as seller_tier, u.email_verified as seller_email_verified, u.created_at as seller_created_at,
         (SELECT COUNT(*) FROM listing_likes WHERE listing_id = l.id) as like_count,
                  (SELECT COUNT(*) FROM user_watchlist WHERE listing_id = l.id) as watch_count
       FROM marketplace_listings l
@@ -636,9 +661,22 @@ router.get('/listings/:id', async (req: Request, res: Response) => {
         videoUrl: listing.video_url,
         sellerName: listing.seller_name,
         sellerTier: listing.seller_tier || 'standard',
-        sellerVerified: listing.seller_tier === 'pro' || listing.seller_tier === 'elite',
-        sellerTrustLevel: getUserTrustLevel(listing.user_id),
+        sellerVerified: (listing.seller_tier === 'pro' || listing.seller_tier === 'elite') || !!listing.seller_email_verified,
+        sellerTrustLevel: (() => {
+          const level = getUserTrustLevel(listing.user_id);
+          if (level === 'unverified') {
+            try { return computeAndStoreTrustScore(listing.user_id).trustLevel; } catch (_e) { return level; }
+          }
+          return level;
+        })(),
         sellerMemberSince: listing.seller_created_at,
+        sellerListingCount: (() => {
+          try {
+            const c = getDb().prepare('SELECT COUNT(*) as cnt FROM marketplace_listings WHERE user_id = ? AND status = ?').get(listing.user_id, 'active') as any;
+            return c?.cnt || 0;
+          } catch (_e) { return 0; }
+        })(),
+        sellerEmailVerified: !!listing.seller_email_verified,
         sellerStoreSlug: storefront?.slug,
         sellerStoreName: storefront?.store_name,
         status: listing.status,
