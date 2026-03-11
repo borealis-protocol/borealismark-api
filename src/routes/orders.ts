@@ -1020,10 +1020,13 @@ async function settleOrder(orderId: string): Promise<{
     logger.warn('HCS anchoring failed (non-fatal)', { error: err.message, orderId });
   }
 
-  // Update order to completed
+  // Update order to completed — explicitly set settlement_type so
+  // dual-rail trust scoring picks it up (hedera vs stripe vs unknown)
+  const resolvedSettlementType = hcsProof ? 'hedera' : 'stripe';
   updateOrderStatus(orderId, 'completed', {
     completed_at: Date.now(),
     settled_at: Date.now(),
+    settlement_type: resolvedSettlementType,
     hedera_transaction_id: hcsProof ? `settlement-${orderId}` : null,
     hcs_topic_id: hcsProof?.topicId || null,
     hcs_sequence_number: hcsProof?.sequenceNumber || null,
