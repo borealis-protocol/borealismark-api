@@ -320,7 +320,8 @@ router.get('/listings', async (req: Request, res: Response) => {
     const limit = allowedLimits.includes(rawLimit) ? rawLimit : Math.min(100, Math.max(1, rawLimit));
 
     let query = `SELECT l.*, u.name as seller_name, u.email as seller_email, u.tier as seller_tier, u.created_at as seller_created_at,
-                 (SELECT COUNT(*) FROM listing_likes WHERE listing_id = l.id) as like_count
+                 (SELECT COUNT(*) FROM listing_likes WHERE listing_id = l.id) as like_count,
+                 (SELECT COUNT(*) FROM user_watchlist WHERE listing_id = l.id) as watch_count
                  FROM marketplace_listings l
                  JOIN users u ON l.user_id = u.id
                  WHERE l.status = 'published'`;
@@ -391,6 +392,7 @@ router.get('/listings', async (req: Request, res: Response) => {
           sellerTrustLevel: getUserTrustLevel(l.user_id),
           sellerAge: Math.floor((Date.now() - (l.seller_created_at || Date.now())) / (1000 * 60 * 60 * 24)),
           likeCount: l.like_count || 0,
+          watchCount: l.watch_count || 0,
           viewCount: l.view_count,
           hasAgent: !!l.assigned_agent_id,
           createdAt: l.created_at,
@@ -459,7 +461,8 @@ router.get('/listings/:id', async (req: Request, res: Response) => {
   try {
     const listing = getDb().prepare(`
       SELECT l.*, u.name as seller_name, u.tier as seller_tier, u.created_at as seller_created_at,
-        (SELECT COUNT(*) FROM listing_likes WHERE listing_id = l.id) as like_count
+        (SELECT COUNT(*) FROM listing_likes WHERE listing_id = l.id) as like_count,
+                 (SELECT COUNT(*) FROM user_watchlist WHERE listing_id = l.id) as watch_count
       FROM marketplace_listings l
       JOIN users u ON l.user_id = u.id
       WHERE l.id = ?
@@ -509,6 +512,7 @@ router.get('/listings/:id', async (req: Request, res: Response) => {
         status: listing.status,
         hasAgent: !!listing.assigned_agent_id,
         likeCount: listing.like_count || 0,
+        watchCount: listing.watch_count || 0,
         viewCount: listing.view_count + 1,
         createdAt: listing.created_at,
         publishedAt: listing.published_at,
@@ -2262,7 +2266,8 @@ router.get('/storefronts/:slug', async (req: Request, res: Response) => {
     const sort = (req.query.sort || 'created_at') as string;
 
     let query = `SELECT l.*, u.name as seller_name, u.tier as seller_tier, u.created_at as seller_created_at,
-                 (SELECT COUNT(*) FROM listing_likes WHERE listing_id = l.id) as like_count
+                 (SELECT COUNT(*) FROM listing_likes WHERE listing_id = l.id) as like_count,
+                 (SELECT COUNT(*) FROM user_watchlist WHERE listing_id = l.id) as watch_count
                  FROM marketplace_listings l
                  JOIN users u ON l.user_id = u.id
                  WHERE l.status = 'published' AND l.user_id = ?`;
@@ -2334,6 +2339,7 @@ router.get('/storefronts/:slug', async (req: Request, res: Response) => {
           externalUrl: l.external_url,
           externalSource: l.external_source,
           likeCount: l.like_count || 0,
+          watchCount: l.watch_count || 0,
           viewCount: l.view_count,
           createdAt: l.created_at,
         })),
