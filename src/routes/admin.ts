@@ -163,7 +163,7 @@ router.patch('/users/:id', requireAuth, requireAdmin, (req: Request, res: Respon
 
     logger.info('Admin updated user', { adminId, userId: req.params.id, changes: parsed.data });
     const updatedUser = getUserById(req.params.id);
-    res.json({ success: true, message: 'User updated', user: updatedUser ? { id: updatedUser.id, tier: updatedUser.tier, role: updatedUser.role, active: updatedUser.active, emailVerified: updatedUser.email_verified } : undefined });
+    res.json({ success: true, message: 'User updated', user: updatedUser ? { id: updatedUser.id, tier: updatedUser.tier, role: updatedUser.role, active: updatedUser.active, emailVerified: updatedUser.emailVerified } : undefined });
   } catch (err: any) {
     logger.error('Admin update user error', { error: err.message });
     res.status(500).json({ success: false, error: 'Failed to update user' });
