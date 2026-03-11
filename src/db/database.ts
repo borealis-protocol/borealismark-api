@@ -1081,6 +1081,136 @@ function initSchema(db: Database.Database): void {
   // Backfill settlement_type for existing orders that have hedera_transaction_id
   db.exec("UPDATE marketplace_orders SET settlement_type = 'hedera' WHERE hedera_transaction_id IS NOT NULL AND settlement_type = 'unknown'");
 
+  // ── Migration Officer: origin tracking on marketplace_listings ──────────────
+  const listingColsV3 = (db.prepare("PRAGMA table_info(marketplace_listings)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!listingColsV3.includes('origin'))              db.exec("ALTER TABLE marketplace_listings ADD COLUMN origin TEXT NOT NULL DEFAULT 'terminal'");
+  if (!listingColsV3.includes('external_listing_id')) db.exec("ALTER TABLE marketplace_listings ADD COLUMN external_listing_id TEXT");
+  if (!listingColsV3.includes('sync_status'))         db.exec("ALTER TABLE marketplace_listings ADD COLUMN sync_status TEXT DEFAULT 'active'");
+  if (!listingColsV3.includes('last_synced_at'))      db.exec("ALTER TABLE marketplace_listings ADD COLUMN last_synced_at INTEGER");
+
+  // Backfill origin for existing imported listings (those with external_source set)
+  db.exec("UPDATE marketplace_listings SET origin = 'imported' WHERE external_source IS NOT NULL AND origin = 'terminal'");
+
+  // ── Sync Schedules table: tracks recurring sync subscriptions ─────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sync_schedules (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      store_url TEXT NOT NULL,
+      platform TEXT NOT NULL DEFAULT 'ebay',
+      store_name TEXT,
+      frequency TEXT NOT NULL DEFAULT 'weekly',
+      tier TEXT NOT NULL DEFAULT 'starter',
+      status TEXT NOT NULL DEFAULT 'active',
+      last_run_at INTEGER,
+      next_run_at INTEGER,
+      listings_tracked INTEGER NOT NULL DEFAULT 0,
+      listings_delisted INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+  `);
+
+  // ── Seed Migration Officer bot ────────────────────────────────────────────
+  {
+    const migrationOfficerExists = db.prepare(
+      "SELECT id FROM bots WHERE name = 'Migration Officer'"
+    ).get() as { id: string } | undefined;
+
+    if (!migrationOfficerExists) {
+      const migrationOfficerId = uuidv4();
+      // Find the system admin (first admin user) to own the bot
+      const adminUser = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as { id: string } | undefined;
+      if (adminUser) {
+        db.prepare(`
+          INSERT INTO bots (id, owner_id, name, bio, capabilities, specialties, avatar_url, tier, ap_points, bm_score, star_rating, total_ratings, jobs_completed, jobs_failed, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          migrationOfficerId,
+          adminUser.id,
+          'Migration Officer',
+          'Your dedicated cross-platform listing migration and sync specialist. I import your external store listings into Borealis Terminal and keep them synchronized — automatically detecting sold-out items, price changes, and availability shifts across eBay and other platforms.',
+          JSON.stringify(['ebay-import', 'listing-sync', 'inventory-management', 'cross-platform-migration', 'price-monitoring', 'availability-tracking']),
+          JSON.stringify(['eBay Store Import', 'Multi-Platform Sync', 'Inventory Reconciliation', 'Automated Delisting', 'Price Harmonization']),
+          '/agents/migration-officer.png',
+          'gold',
+          500,
+          85,
+          4.8,
+          12,
+          47,
+          0,
+          'active',
+          Date.now(),
+          Date.now()
+        );
+
+        // Create tiered service listings for Migration Officer
+        const now = Date.now();
+
+        // Tier 1: Starter — One-time Import ($25)
+        db.prepare(`
+          INSERT INTO terminal_services (id, agent_id, title, description, category, price_usdc, min_trust_score, capabilities, max_concurrent_jobs, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          uuidv4(),
+          migrationOfficerId,
+          'Store Migration — Starter',
+          'One-time import of up to 100 listings from your eBay store into Borealis Terminal. Each listing is categorized, enriched with condition tags and origin tracking, and published with a direct backlink to the original platform. Perfect for sellers testing the waters on Borealis. Includes: automated categorization, image migration, condition mapping, and origin badges that clearly mark imported listings.',
+          'migration',
+          25.00,
+          0,
+          JSON.stringify(['ebay-import', 'categorization', 'image-migration', 'origin-tracking']),
+          5,
+          'active',
+          now,
+          now
+        );
+
+        // Tier 2: Professional — Import + Monthly Sync ($45)
+        db.prepare(`
+          INSERT INTO terminal_services (id, agent_id, title, description, category, price_usdc, min_trust_score, capabilities, max_concurrent_jobs, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          uuidv4(),
+          migrationOfficerId,
+          'Store Migration — Professional',
+          'Full import of up to 500 listings PLUS monthly sync sweeps for 3 months. The Migration Officer monitors your external store and automatically detects sold-out items, delisting them from Terminal so buyers never encounter stale listings. Includes everything in Starter plus: monthly inventory sync, automatic sold-item detection and delisting, price change monitoring, and a sync health dashboard. Your listings stay fresh and accurate across both platforms — zero manual effort required.',
+          'migration',
+          45.00,
+          10,
+          JSON.stringify(['ebay-import', 'monthly-sync', 'sold-detection', 'auto-delist', 'price-monitoring']),
+          10,
+          'active',
+          now,
+          now
+        );
+
+        // Tier 3: Enterprise — Import + Weekly Sync ($75)
+        db.prepare(`
+          INSERT INTO terminal_services (id, agent_id, title, description, category, price_usdc, min_trust_score, capabilities, max_concurrent_jobs, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          uuidv4(),
+          migrationOfficerId,
+          'Store Migration — Enterprise',
+          'Unlimited listing import PLUS weekly sync sweeps for 6 months. Built for high-volume sellers who need real-time inventory accuracy across platforms. The Migration Officer performs weekly sweeps detecting sold items, price changes, new additions to your external store, and availability shifts — keeping your Terminal storefront perfectly mirrored. Includes everything in Professional plus: weekly sync frequency, unlimited listings, new-item auto-import, priority queue processing, and dedicated sync analytics. Never worry about cross-platform inventory mismatches again.',
+          'migration',
+          75.00,
+          25,
+          JSON.stringify(['ebay-import', 'weekly-sync', 'unlimited-listings', 'auto-import-new', 'priority-processing', 'sync-analytics']),
+          20,
+          'active',
+          now,
+          now
+        );
+
+        logger.info(`Seeded Migration Officer bot (${migrationOfficerId}) with 3 tiered service listings`);
+      }
+    }
+  }
+
   // Ensure the master API key exists with full admin scopes
   const masterKey = process.env.API_MASTER_KEY;
   if (!masterKey) {

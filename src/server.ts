@@ -30,6 +30,7 @@ import verificationRouter from './routes/verification';
 import imagesRouter from './routes/images';
 import notificationsRouter from './routes/notifications';
 import growthRouter from './routes/growth';
+import migrationRouter from './routes/migration';
 import { cleanupExpiredInvoices } from './hedera/usdc';
 import { validateHederaConfig, logHealthCheckResults } from './hedera/healthcheck';
 import { validateStripeConfig, getStripeMode } from './stripe/mode';
@@ -209,6 +210,7 @@ app.use('/v1/admin/mail', adminMailRouter);
 app.use('/v1/verification', verificationRouter);
 app.use('/v1/notifications', notificationsRouter);
 app.use('/v1/growth', growthRouter);
+app.use('/v1/migration', migrationRouter);
 
 // ─── Static Files (Dashboard) ────────────────────────────────────────────────
 

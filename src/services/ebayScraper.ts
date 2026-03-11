@@ -293,14 +293,16 @@ export async function importEbayStore(
         db.prepare(`
           INSERT INTO marketplace_listings
           (id, user_id, title, description, listing_type, category, condition, price_usdc, price_cad,
-           shipping_cost_cad, images, status, external_url, external_source, platform, created_at, updated_at, published_at)
-          VALUES (?, ?, ?, ?, 'sell', 'general', ?, ?, ?, ?, ?, 'published', ?, 'ebay', 'ebay', ?, ?, ?)
+           shipping_cost_cad, images, status, external_url, external_source, platform,
+           origin, sync_status, last_synced_at, created_at, updated_at, published_at)
+          VALUES (?, ?, ?, ?, 'sell', 'general', ?, ?, ?, ?, ?, 'published', ?, 'ebay', 'ebay',
+           'imported', 'active', ?, ?, ?, ?)
         `).run(
           listingId, userId,
           listing.title, listing.description,
           listing.condition, priceUsdc, listing.priceCad,
           listing.shippingCostCad, imagesJson,
-          listing.ebayUrl, now, now, now
+          listing.ebayUrl, now, now, now, now
         );
 
         imported++;
