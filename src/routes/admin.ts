@@ -236,13 +236,13 @@ router.delete('/users/:id', requireAuth, requireAdmin, (req: Request, res: Respo
     logger.info('Admin deleted user and all associated data', {
       adminId,
       deletedUserId: userId,
-      deletedUsername: user.username,
+      deletedUsername: user.name,
       deletions,
     });
 
     res.json({
       success: true,
-      message: `User "${user.username}" and all associated data deleted`,
+      message: `User "${user.name}" and all associated data deleted`,
       deletions,
     });
   } catch (err: any) {
