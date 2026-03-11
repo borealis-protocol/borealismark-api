@@ -463,6 +463,9 @@ router.get('/listings', async (req: Request, res: Response) => {
         uts.trust_level as seller_trust_level,
         uts.total_score as seller_trust_score,
         u.name as seller_name,
+        u.tier as seller_tier,
+        u.email_verified as seller_email_verified,
+        u.created_at as seller_created_at,
         sf.store_name as seller_store_name,
         sf.slug as seller_store_slug,
         (SELECT COUNT(*) FROM listing_likes ll WHERE ll.listing_id = l.id) as like_count
@@ -501,6 +504,9 @@ router.get('/listings', async (req: Request, res: Response) => {
             externalSource: l.external_source,
             sellerName: l.seller_name,
             sellerId: l.user_id,
+            sellerTier: l.seller_tier || 'standard',
+            sellerVerified: (l.seller_tier === 'pro' || l.seller_tier === 'elite') || !!l.seller_email_verified,
+            sellerAge: l.seller_created_at ? Math.floor((Date.now() - l.seller_created_at) / 86400000) : 0,
             sellerTrustLevel: trustLevel,
             sellerTrustScore: l.seller_trust_score || 0,
             sellerStorefront: l.seller_store_name ? {

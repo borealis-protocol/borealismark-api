@@ -154,8 +154,16 @@ router.patch('/users/:id', requireAuth, requireAdmin, (req: Request, res: Respon
       getDb().prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
     }
 
+    // Recompute trust score when tier or verification status changes
+    // This ensures listing badges, trust levels, and all derived data stay in sync
+    if (tier) {
+      const trustScore = computeAndStoreTrustScore(req.params.id);
+      logger.info('Trust score recomputed after tier change', { userId: req.params.id, newTier: tier, trustLevel: trustScore.trustLevel, totalScore: trustScore.totalScore });
+    }
+
     logger.info('Admin updated user', { adminId, userId: req.params.id, changes: parsed.data });
-    res.json({ success: true, message: 'User updated' });
+    const updatedUser = getUserById(req.params.id);
+    res.json({ success: true, message: 'User updated', user: updatedUser ? { id: updatedUser.id, tier: updatedUser.tier, role: updatedUser.role, active: updatedUser.active, emailVerified: updatedUser.email_verified } : undefined });
   } catch (err: any) {
     logger.error('Admin update user error', { error: err.message });
     res.status(500).json({ success: false, error: 'Failed to update user' });
