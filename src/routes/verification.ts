@@ -549,12 +549,13 @@ router.get('/status', requireAuth, (req: Request, res: Response) => {
     };
 
     const accountAgeLayer = {
-      type: 'account_age',
-      days: trustScore.accountAgeDays,
-      points: trustScore.accountAgeDays >= 180 ? TRUST_POINTS.ACCOUNT_AGE_180D :
-              trustScore.accountAgeDays >= 90 ? TRUST_POINTS.ACCOUNT_AGE_90D :
-              trustScore.accountAgeDays >= 30 ? TRUST_POINTS.ACCOUNT_AGE_30D : 0,
-      maxPoints: TRUST_POINTS.ACCOUNT_AGE_180D,
+      type: 'active_engagement',
+      activeLoginDays: trustScore.accountAgeDays,
+      points: trustScore.accountAgeDays >= 180 ? TRUST_POINTS.ACTIVE_DAYS_180 :
+              trustScore.accountAgeDays >= 90 ? TRUST_POINTS.ACTIVE_DAYS_90 :
+              trustScore.accountAgeDays >= 30 ? TRUST_POINTS.ACTIVE_DAYS_30 : 0,
+      maxPoints: TRUST_POINTS.ACTIVE_DAYS_180,
+      description: 'Active login days (must log in on 30/90/180 distinct days to earn points)',
     };
 
     res.json({

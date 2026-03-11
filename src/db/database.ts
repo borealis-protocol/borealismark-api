@@ -977,6 +977,18 @@ function initSchema(db: Database.Database): void {
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
 
+    -- ── v41 Active Login Tracking ─────────────────────────────────────────────
+    -- Account age bonus requires ACTIVE participation, not just passive account existence.
+    -- Each distinct calendar day with at least one login is recorded.
+    CREATE TABLE IF NOT EXISTS user_login_days (
+      user_id TEXT NOT NULL,
+      login_date TEXT NOT NULL,  -- YYYY-MM-DD format (UTC)
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, login_date),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_login_days_user ON user_login_days(user_id);
+
     -- ── v40 Signal Tower: Notification Center ──────────────────────────────────
 
     CREATE TABLE IF NOT EXISTS user_notifications (
@@ -1164,9 +1176,21 @@ export function getUserById(id: string): UserRecord | null {
 }
 
 export function updateUserLogin(id: string): void {
-  getDb()
-    .prepare('UPDATE users SET last_login_at = ? WHERE id = ?')
-    .run(Date.now(), id);
+  const db = getDb();
+  const now = Date.now();
+  db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(now, id);
+  // Record active login day for account age trust scoring
+  const today = new Date(now).toISOString().split('T')[0]; // YYYY-MM-DD UTC
+  db.prepare(
+    'INSERT OR IGNORE INTO user_login_days (user_id, login_date, created_at) VALUES (?, ?, ?)'
+  ).run(id, today, now);
+}
+
+export function getActiveLoginDays(userId: string): number {
+  const row = getDb()
+    .prepare('SELECT COUNT(*) as cnt FROM user_login_days WHERE user_id = ?')
+    .get(userId) as { cnt: number };
+  return row.cnt;
 }
 
 export function updateUserTier(id: string, tier: 'standard' | 'pro' | 'elite'): void {
@@ -3555,9 +3579,9 @@ export const TRUST_POINTS = {
   SOCIAL_MEDIA: 15,        // per verified social account
   SOCIAL_MEDIA_MAX: 45,    // max 3 social accounts counted
   GOVERNMENT_ID: 30,
-  ACCOUNT_AGE_30D: 5,      // bonus for 30+ day old account
-  ACCOUNT_AGE_90D: 10,     // bonus for 90+ day old account
-  ACCOUNT_AGE_180D: 15,    // bonus for 180+ day old account
+  ACTIVE_DAYS_30: 5,       // bonus for 30+ active login days
+  ACTIVE_DAYS_90: 10,      // bonus for 90+ active login days
+  ACTIVE_DAYS_180: 15,     // bonus for 180+ active login days (requires sustained engagement)
   // Dual-rail transaction scoring: behavior-based trust, not payment verification
   HEDERA_TX_BONUS: 2,      // per Hedera-settled transaction (on-chain, immutable proof)
   STRIPE_TX_BONUS: 1,      // per Stripe-settled transaction (off-chain but verified, lower weight)
@@ -3724,11 +3748,12 @@ export function computeAndStoreTrustScore(userId: string): TrustScoreRecord {
   ).get(userId) as any).cnt;
   if (docVerified > 0) totalScore += TRUST_POINTS.GOVERNMENT_ID;
 
-  // 4. Account age bonus
-  const accountAgeDays = user ? Math.floor((now - user.created_at) / (24 * 60 * 60 * 1000)) : 0;
-  if (accountAgeDays >= 180) totalScore += TRUST_POINTS.ACCOUNT_AGE_180D;
-  else if (accountAgeDays >= 90) totalScore += TRUST_POINTS.ACCOUNT_AGE_90D;
-  else if (accountAgeDays >= 30) totalScore += TRUST_POINTS.ACCOUNT_AGE_30D;
+  // 4. Active login days bonus (requires sustained engagement, not just passive account age)
+  const activeLoginDays = getActiveLoginDays(userId);
+  const accountAgeDays = activeLoginDays; // renamed for backward compatibility in trust score record
+  if (activeLoginDays >= 180) totalScore += TRUST_POINTS.ACTIVE_DAYS_180;
+  else if (activeLoginDays >= 90) totalScore += TRUST_POINTS.ACTIVE_DAYS_90;
+  else if (activeLoginDays >= 30) totalScore += TRUST_POINTS.ACTIVE_DAYS_30;
 
   // 5. Dual-rail transaction history bonus
   //    Hedera-settled = 2 pts each (on-chain, immutable proof of delivery)
