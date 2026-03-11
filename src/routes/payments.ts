@@ -273,10 +273,12 @@ router.post('/checkout', async (req: Request, res: Response) => {
         timestamp: Date.now(),
       });
     }
-    logger.error('Checkout creation failed', { error: err.message });
+    logger.error('Checkout creation failed', { error: err.message, type: err.type, code: err.code, statusCode: err.statusCode, raw: err.raw?.message });
     res.status(500).json({
       success: false,
       error: 'Failed to create checkout session',
+      detail: err.message,
+      stripeCode: err.code,
       timestamp: Date.now(),
     });
   }
