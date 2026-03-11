@@ -102,6 +102,11 @@ const ListingUpdateSchema = z.object({
   priceUsdc: z.number().min(0).max(1000000).optional(),
   tradeFor: z.string().max(500).optional(),
   tags: z.array(z.string().max(30)).max(10).optional(),
+  category: z.enum([
+    'digital-goods', 'physical-goods', 'services', 'ai-models',
+    'datasets', 'consulting', 'creative', 'development',
+    'marketing', 'other',
+  ]).optional(),
 });
 
 const MessageSchema = z.object({
@@ -411,8 +416,15 @@ router.get('/listings', async (req: Request, res: Response) => {
       params.push(`%${q}%`, `%${q}%`);
     }
     if (category) {
-      where += " AND l.category = ?";
-      params.push(category);
+      // Support comma-separated categories for sector filtering (e.g. "consulting,services")
+      const cats = category.split(',').map(c => c.trim()).filter(Boolean);
+      if (cats.length === 1) {
+        where += " AND l.category = ?";
+        params.push(cats[0]);
+      } else if (cats.length > 1) {
+        where += ` AND l.category IN (${cats.map(() => '?').join(',')})`;
+        params.push(...cats);
+      }
     }
     if (listingType) {
       where += " AND l.listing_type = ?";
@@ -837,6 +849,7 @@ router.patch('/listings/:id', requireAuth, async (req: Request, res: Response) =
         price_usdc = COALESCE(?, price_usdc),
         trade_for = COALESCE(?, trade_for),
         tags = COALESCE(?, tags),
+        category = COALESCE(?, category),
         status = ?,
         audit_id = ?,
         updated_at = ?
@@ -845,6 +858,7 @@ router.patch('/listings/:id', requireAuth, async (req: Request, res: Response) =
       updates.title ?? null, updates.description ?? null,
       updates.priceUsdc ?? null, updates.tradeFor ?? null,
       updates.tags ? JSON.stringify(updates.tags) : null,
+      updates.category ?? null,
       newStatus, newAuditId, now, req.params.id,
     );
 
