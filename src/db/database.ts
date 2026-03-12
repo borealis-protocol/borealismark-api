@@ -1731,6 +1731,9 @@ function initSchema(db: Database.Database): void {
       source_name TEXT,
       source_title TEXT,
       exchanges TEXT NOT NULL DEFAULT '[]',
+      verdict_team TEXT,
+      verdict_pct INTEGER,
+      verdict_summary TEXT,
       status TEXT NOT NULL DEFAULT 'draft',
       published INTEGER NOT NULL DEFAULT 0,
       featured INTEGER NOT NULL DEFAULT 0,
@@ -1742,6 +1745,12 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_debates_status ON debates(status);
     CREATE INDEX IF NOT EXISTS idx_debates_created ON debates(created_at DESC);
   `);
+
+  // Migrate: add verdict columns to debates table
+  const debateCols = (db.prepare("PRAGMA table_info(debates)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!debateCols.includes('verdict_team'))    db.exec("ALTER TABLE debates ADD COLUMN verdict_team TEXT");
+  if (!debateCols.includes('verdict_pct'))     db.exec("ALTER TABLE debates ADD COLUMN verdict_pct INTEGER");
+  if (!debateCols.includes('verdict_summary')) db.exec("ALTER TABLE debates ADD COLUMN verdict_summary TEXT");
 
   // Seed the three Trust Guides if they don't exist
   {
@@ -5607,18 +5616,32 @@ export function insertDebate(debate: {
   source_article_id?: string; source_url?: string; source_name?: string;
   source_title?: string; exchanges: any[]; status?: string;
   published?: number; featured?: number;
+  verdict_team?: string; verdict_pct?: number; verdict_summary?: string;
 }): void {
   getDb().prepare(`
-    INSERT INTO debates (id, topic, question, summary, source_article_id, source_url, source_name, source_title, exchanges, status, published, featured, created_at, published_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO debates (id, topic, question, summary, source_article_id, source_url, source_name, source_title, exchanges, verdict_team, verdict_pct, verdict_summary, status, published, featured, created_at, published_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     debate.id, debate.topic, debate.question, debate.summary || null,
     debate.source_article_id || null, debate.source_url || null,
     debate.source_name || null, debate.source_title || null,
-    JSON.stringify(debate.exchanges), debate.status || 'published',
+    JSON.stringify(debate.exchanges),
+    debate.verdict_team || null, debate.verdict_pct || null, debate.verdict_summary || null,
+    debate.status || 'published',
     debate.published ?? 1, debate.featured ?? 1,
     Date.now(), debate.published ? Date.now() : null
   );
+}
+
+/** Get multiple recent published debates for the featured feed */
+export function getFeaturedDebates(limit = 5): any[] {
+  const rows = getDb().prepare(
+    'SELECT * FROM debates WHERE published = 1 ORDER BY published_at DESC LIMIT ?'
+  ).all(limit) as any[];
+  for (const row of rows) {
+    row.exchanges = JSON.parse(row.exchanges || '[]');
+  }
+  return rows;
 }
 
 /** Get the latest featured debate */

@@ -3,6 +3,7 @@
  *
  * Public:
  *   GET  /v1/debates/latest     — Get the current featured debate
+ *   GET  /v1/debates/featured   — Get multiple recent debates for the arena feed
  *   GET  /v1/debates/:id        — Get a specific debate by ID
  *   GET  /v1/debates            — List recent debates
  *
@@ -22,6 +23,7 @@ import {
   listDebateSources,
   insertDebate,
   clearFeaturedDebates,
+  getFeaturedDebates,
   getUnusedSources,
   markSourceUsed,
 } from '../db/database';
@@ -39,6 +41,29 @@ function requireMasterKey(req: Request, res: Response, next: Function) {
   next();
 }
 
+// ─── Debate response formatter ──────────────────────────────────────────────
+
+function formatDebate(debate: any) {
+  return {
+    id: debate.id,
+    topic: debate.topic,
+    question: debate.question,
+    summary: debate.summary,
+    source: {
+      url: debate.source_url,
+      name: debate.source_name,
+      title: debate.source_title,
+    },
+    exchanges: debate.exchanges,
+    verdict: debate.verdict_team ? {
+      team: debate.verdict_team,
+      pct: debate.verdict_pct,
+      summary: debate.verdict_summary,
+    } : null,
+    published_at: debate.published_at,
+  };
+}
+
 // ─── Public Endpoints ────────────────────────────────────────────────────────
 
 /**
@@ -49,31 +74,31 @@ router.get('/latest', (_req: Request, res: Response) => {
   try {
     const debate = getLatestDebate();
     if (!debate) {
-      return res.json({
-        ok: true,
-        debate: null,
-        message: 'No featured debate available yet',
-      });
+      return res.json({ ok: true, debate: null, message: 'No featured debate available yet' });
     }
+    res.json({ ok: true, debate: formatDebate(debate) });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch debate', detail: err.message });
+  }
+});
+
+/**
+ * GET /v1/debates/featured
+ * Returns multiple recent published debates for the arena feed
+ * Query: ?limit=5 (default 5, max 10)
+ */
+router.get('/featured', (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit as string) || 5, 10);
+    const debates = getFeaturedDebates(limit);
 
     res.json({
       ok: true,
-      debate: {
-        id: debate.id,
-        topic: debate.topic,
-        question: debate.question,
-        summary: debate.summary,
-        source: {
-          url: debate.source_url,
-          name: debate.source_name,
-          title: debate.source_title,
-        },
-        exchanges: debate.exchanges,
-        published_at: debate.published_at,
-      },
+      debates: debates.map(formatDebate),
+      count: debates.length,
     });
   } catch (err: any) {
-    res.status(500).json({ error: 'Failed to fetch debate', detail: err.message });
+    res.status(500).json({ error: 'Failed to fetch featured debates', detail: err.message });
   }
 });
 
@@ -101,23 +126,7 @@ router.get('/:id', (req: Request, res: Response) => {
     if (!debate) {
       return res.status(404).json({ error: 'Debate not found' });
     }
-
-    res.json({
-      ok: true,
-      debate: {
-        id: debate.id,
-        topic: debate.topic,
-        question: debate.question,
-        summary: debate.summary,
-        source: {
-          url: debate.source_url,
-          name: debate.source_name,
-          title: debate.source_title,
-        },
-        exchanges: debate.exchanges,
-        published_at: debate.published_at,
-      },
-    });
+    res.json({ ok: true, debate: formatDebate(debate) });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to fetch debate', detail: err.message });
   }
@@ -184,22 +193,22 @@ router.post('/generate', requireMasterKey, async (req: Request, res: Response) =
 /**
  * POST /v1/debates/seed
  * Directly insert a pre-generated debate (bypasses Claude API)
- * Useful when API credits are unavailable or for manual curation
  *
  * Body: {
- *   source_id?: string,         — Optional: link to an ingested source article
- *   source_url: string,
- *   source_name: string,
- *   source_title: string,
- *   question: string,
- *   topic: string,
- *   summary: string,
- *   exchanges: Array<{team, name, argument, citation}>
+ *   source_url, source_name, source_title, question, topic, summary,
+ *   exchanges: [{team, name, argument, citation}],
+ *   verdict_team?: "blue"|"red",
+ *   verdict_pct?: number (51-95),
+ *   verdict_summary?: string
  * }
  */
 router.post('/seed', requireMasterKey, (req: Request, res: Response) => {
   try {
-    const { source_id, source_url, source_name, source_title, question, topic, summary, exchanges } = req.body;
+    const {
+      source_id, source_url, source_name, source_title,
+      question, topic, summary, exchanges,
+      verdict_team, verdict_pct, verdict_summary,
+    } = req.body;
 
     if (!question || !exchanges || !Array.isArray(exchanges) || exchanges.length === 0) {
       return res.status(400).json({ ok: false, error: 'Missing required fields: question, exchanges[]' });
@@ -211,19 +220,19 @@ router.post('/seed', requireMasterKey, (req: Request, res: Response) => {
 
     const debateId = uuidv4();
 
-    // Clear previous featured debate and set new one
-    clearFeaturedDebates();
-
     insertDebate({
       id: debateId,
       topic: topic || 'AI',
       question,
-      summary: summary || null,
-      source_article_id: source_id || null,
+      summary: summary || undefined,
+      source_article_id: source_id || undefined,
       source_url,
       source_name,
       source_title,
       exchanges,
+      verdict_team: verdict_team || undefined,
+      verdict_pct: verdict_pct || undefined,
+      verdict_summary: verdict_summary || undefined,
       status: 'published',
       published: 1,
       featured: 1,
@@ -231,7 +240,7 @@ router.post('/seed', requireMasterKey, (req: Request, res: Response) => {
 
     // If a source_id was provided, mark it as used
     if (source_id) {
-      try { markSourceUsed(source_id); } catch (_e) { /* ignore if source doesn't exist */ }
+      try { markSourceUsed(source_id); } catch (_e) { /* ignore */ }
     }
 
     res.json({
