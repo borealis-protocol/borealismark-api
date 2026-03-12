@@ -1264,6 +1264,25 @@ function initSchema(db: Database.Database): void {
     logger.info(`[Migration] Backfilled ${importedListings.length} Migration Officer activity records`);
   }
 
+  // ── Fix imported listings with stale eBay placeholder images
+  // These have s-l500 images (scraper always imports s-l1600) meaning eBay replaced real images with placeholder
+  // Clear the dead images so the frontend shows its built-in placeholder instead of a broken thumbnail
+  const staleImageListings = db.prepare(`
+    SELECT id FROM marketplace_listings
+    WHERE origin = 'imported' AND status = 'active'
+      AND images LIKE '%s-l500%' AND images NOT LIKE '%s-l1600%'
+  `).all() as any[];
+
+  if (staleImageListings.length > 0) {
+    const now = Date.now();
+    db.prepare(
+      `UPDATE marketplace_listings SET images = '[]', sync_status = 'stale', updated_at = ?
+       WHERE origin = 'imported' AND status = 'active'
+         AND images LIKE '%s-l500%' AND images NOT LIKE '%s-l1600%'`
+    ).run(now);
+    logger.info(`[Migration Officer] Cleared stale eBay placeholder images from ${staleImageListings.length} listings`);
+  }
+
   // Ensure the master API key exists with full admin scopes
   const masterKey = process.env.API_MASTER_KEY;
   if (!masterKey) {
