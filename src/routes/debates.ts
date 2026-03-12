@@ -9,15 +9,21 @@
  * Admin (requires API master key):
  *   POST /v1/debates/ingest     — Trigger RSS feed ingestion
  *   POST /v1/debates/generate   — Trigger debate generation from sources
+ *   POST /v1/debates/seed       — Directly insert a pre-generated debate
  *   GET  /v1/debates/sources    — List ingested source articles
  */
 
 import { Router, Request, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import {
   getLatestDebate,
   getDebateById,
   listDebates,
   listDebateSources,
+  insertDebate,
+  clearFeaturedDebates,
+  getUnusedSources,
+  markSourceUsed,
 } from '../db/database';
 import { ingestRSSFeeds, generateDebate } from '../services/debateEngine';
 
@@ -68,6 +74,20 @@ router.get('/latest', (_req: Request, res: Response) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to fetch debate', detail: err.message });
+  }
+});
+
+/**
+ * GET /v1/debates/sources
+ * List ingested source articles (admin view)
+ * NOTE: Must be registered BEFORE /:id to avoid route conflict
+ */
+router.get('/sources', requireMasterKey as any, (_req: Request, res: Response) => {
+  try {
+    const sources = listDebateSources(20);
+    res.json({ ok: true, sources, count: sources.length });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to list sources', detail: err.message });
   }
 });
 
@@ -162,15 +182,65 @@ router.post('/generate', requireMasterKey, async (req: Request, res: Response) =
 });
 
 /**
- * GET /v1/debates/sources
- * List ingested source articles (admin view)
+ * POST /v1/debates/seed
+ * Directly insert a pre-generated debate (bypasses Claude API)
+ * Useful when API credits are unavailable or for manual curation
+ *
+ * Body: {
+ *   source_id?: string,         — Optional: link to an ingested source article
+ *   source_url: string,
+ *   source_name: string,
+ *   source_title: string,
+ *   question: string,
+ *   topic: string,
+ *   summary: string,
+ *   exchanges: Array<{team, name, argument, citation}>
+ * }
  */
-router.get('/sources', requireMasterKey as any, (_req: Request, res: Response) => {
+router.post('/seed', requireMasterKey, (req: Request, res: Response) => {
   try {
-    const sources = listDebateSources(20);
-    res.json({ ok: true, sources, count: sources.length });
+    const { source_id, source_url, source_name, source_title, question, topic, summary, exchanges } = req.body;
+
+    if (!question || !exchanges || !Array.isArray(exchanges) || exchanges.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Missing required fields: question, exchanges[]' });
+    }
+
+    if (!source_url || !source_name || !source_title) {
+      return res.status(400).json({ ok: false, error: 'Missing required fields: source_url, source_name, source_title' });
+    }
+
+    const debateId = uuidv4();
+
+    // Clear previous featured debate and set new one
+    clearFeaturedDebates();
+
+    insertDebate({
+      id: debateId,
+      topic: topic || 'AI',
+      question,
+      summary: summary || null,
+      source_article_id: source_id || null,
+      source_url,
+      source_name,
+      source_title,
+      exchanges,
+      status: 'published',
+      published: 1,
+      featured: 1,
+    });
+
+    // If a source_id was provided, mark it as used
+    if (source_id) {
+      try { markSourceUsed(source_id); } catch (_e) { /* ignore if source doesn't exist */ }
+    }
+
+    res.json({
+      ok: true,
+      message: 'Debate seeded successfully',
+      debate_id: debateId,
+    });
   } catch (err: any) {
-    res.status(500).json({ error: 'Failed to list sources', detail: err.message });
+    res.status(500).json({ error: 'Failed to seed debate', detail: err.message });
   }
 });
 
