@@ -1055,6 +1055,16 @@ async function settleOrder(orderId: string): Promise<{
     logger.error('Trust score update failed on settlement', { error: trustErr.message, orderId });
   }
 
+  // Mark the listing as sold so it no longer appears in active store listings
+  try {
+    getDb().prepare(
+      `UPDATE marketplace_listings SET status = 'sold', updated_at = ? WHERE id = ?`
+    ).run(Date.now(), order.listing_id);
+    logger.info('Listing marked as sold', { listingId: order.listing_id, orderId });
+  } catch (soldErr: any) {
+    logger.error('Failed to mark listing as sold', { error: soldErr.message, orderId, listingId: order.listing_id });
+  }
+
   // v39: Send settlement emails to both parties
   try {
     const buyer = getUserById(order.buyer_id as string);

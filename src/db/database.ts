@@ -1264,23 +1264,29 @@ function initSchema(db: Database.Database): void {
     logger.info(`[Migration] Backfilled ${importedListings.length} Migration Officer activity records`);
   }
 
-  // ── Fix imported listings with stale eBay placeholder images
-  // These have s-l500 images (scraper always imports s-l1600) meaning eBay replaced real images with placeholder
-  // Clear the dead images so the frontend shows its built-in placeholder instead of a broken thumbnail
+  // ── Remove imported listings whose eBay source is delisted (stale placeholder images)
+  // These have s-l500 images (scraper always imports s-l1600) meaning eBay delisted the original listing
+  // Also remove any imported listings that were previously cleared to empty images (sync_status = 'stale')
+  // These are no longer valid and should not appear in the store
   const staleImageListings = db.prepare(`
     SELECT id FROM marketplace_listings
     WHERE origin = 'imported' AND status IN ('active', 'published')
-      AND images LIKE '%s-l500%' AND images NOT LIKE '%s-l1600%'
+      AND (
+        (images LIKE '%s-l500%' AND images NOT LIKE '%s-l1600%')
+        OR (images = '[]' AND sync_status = 'stale')
+      )
   `).all() as any[];
 
   if (staleImageListings.length > 0) {
-    const now = Date.now();
     db.prepare(
-      `UPDATE marketplace_listings SET images = '[]', sync_status = 'stale', updated_at = ?
+      `DELETE FROM marketplace_listings
        WHERE origin = 'imported' AND status IN ('active', 'published')
-         AND images LIKE '%s-l500%' AND images NOT LIKE '%s-l1600%'`
-    ).run(now);
-    logger.info(`[Migration Officer] Cleared stale eBay placeholder images from ${staleImageListings.length} listings`);
+         AND (
+           (images LIKE '%s-l500%' AND images NOT LIKE '%s-l1600%')
+           OR (images = '[]' AND sync_status = 'stale')
+         )`
+    ).run();
+    logger.info(`[Migration Officer] Removed ${staleImageListings.length} delisted eBay listings with invalid images`);
   }
 
   // Ensure the master API key exists with full admin scopes

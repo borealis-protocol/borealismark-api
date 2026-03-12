@@ -2476,7 +2476,7 @@ router.get('/storefronts/:slug', async (req: Request, res: Response) => {
     const categories = getDb().prepare(`
       SELECT DISTINCT category, COUNT(*) as count
       FROM marketplace_listings
-      WHERE user_id = ? AND status = 'published' AND category IS NOT NULL
+      WHERE user_id = ? AND status IN ('published', 'sold') AND category IS NOT NULL
       GROUP BY category ORDER BY count DESC
     `).all(userId) as any[];
 
@@ -2484,7 +2484,7 @@ router.get('/storefronts/:slug', async (req: Request, res: Response) => {
     const conditions = getDb().prepare(`
       SELECT DISTINCT condition, COUNT(*) as count
       FROM marketplace_listings
-      WHERE user_id = ? AND status = 'published' AND condition IS NOT NULL
+      WHERE user_id = ? AND status IN ('published', 'sold') AND condition IS NOT NULL
       GROUP BY condition ORDER BY count DESC
     `).all(userId) as any[];
 
@@ -2501,7 +2501,7 @@ router.get('/storefronts/:slug', async (req: Request, res: Response) => {
                  (SELECT COUNT(*) FROM user_watchlist WHERE listing_id = l.id) as watch_count
                  FROM marketplace_listings l
                  JOIN users u ON l.user_id = u.id
-                 WHERE l.status = 'published' AND l.user_id = ?`;
+                 WHERE l.status IN ('published', 'sold') AND l.user_id = ?`;
     const params: any[] = [(storefront as any).user_id];
 
     if (category) {
@@ -2524,7 +2524,7 @@ router.get('/storefronts/:slug', async (req: Request, res: Response) => {
     // Count — build separate count query to avoid regex issues
     let countQuery = `SELECT COUNT(*) as total FROM marketplace_listings l
                       JOIN users u ON l.user_id = u.id
-                      WHERE l.status = 'published' AND l.user_id = ?`;
+                      WHERE l.status IN ('published', 'sold') AND l.user_id = ?`;
     const countParams: any[] = [(storefront as any).user_id];
     if (category) { countQuery += ` AND l.category = ?`; countParams.push(category); }
     if (platform) { countQuery += ` AND l.platform = ?`; countParams.push(platform); }
@@ -2592,6 +2592,7 @@ router.get('/storefronts/:slug', async (req: Request, res: Response) => {
           sellerVerified: l.seller_tier === 'pro' || l.seller_tier === 'elite',
           externalUrl: l.external_url,
           externalSource: l.external_source,
+          status: l.status,
           origin: l.origin || 'terminal',
           syncStatus: l.sync_status || null,
           likeCount: l.like_count || 0,
