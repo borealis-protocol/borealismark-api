@@ -1269,7 +1269,7 @@ function initSchema(db: Database.Database): void {
   // Clear the dead images so the frontend shows its built-in placeholder instead of a broken thumbnail
   const staleImageListings = db.prepare(`
     SELECT id FROM marketplace_listings
-    WHERE origin = 'imported' AND status = 'active'
+    WHERE origin = 'imported' AND status IN ('active', 'published')
       AND images LIKE '%s-l500%' AND images NOT LIKE '%s-l1600%'
   `).all() as any[];
 
@@ -1277,7 +1277,7 @@ function initSchema(db: Database.Database): void {
     const now = Date.now();
     db.prepare(
       `UPDATE marketplace_listings SET images = '[]', sync_status = 'stale', updated_at = ?
-       WHERE origin = 'imported' AND status = 'active'
+       WHERE origin = 'imported' AND status IN ('active', 'published')
          AND images LIKE '%s-l500%' AND images NOT LIKE '%s-l1600%'`
     ).run(now);
     logger.info(`[Migration Officer] Cleared stale eBay placeholder images from ${staleImageListings.length} listings`);
