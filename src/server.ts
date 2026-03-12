@@ -31,12 +31,13 @@ import imagesRouter from './routes/images';
 import notificationsRouter from './routes/notifications';
 import growthRouter from './routes/growth';
 import migrationRouter from './routes/migration';
+import progressionRouter from './routes/progression';
 import { cleanupExpiredInvoices } from './hedera/usdc';
 import { validateHederaConfig, logHealthCheckResults } from './hedera/healthcheck';
 import { validateStripeConfig, getStripeMode } from './stripe/mode';
 import { startAggregationSchedule } from './services/dataStore';
 import { startAnchoringSchedule } from './services/hederaAnchor';
-import { events as eventBus, initAdminNotifications, initNotificationListeners } from './services/eventBus';
+import { events as eventBus, initAdminNotifications, initNotificationListeners, initProgressionListeners } from './services/eventBus';
 import { getDetailedHealth } from './services/monitoring';
 import {
   getExpiredUsdcSubscriptions, getAllExpiredSubscriptions, getExpiringSubscriptions,
@@ -212,6 +213,7 @@ app.use('/v1/verification', verificationRouter);
 app.use('/v1/notifications', notificationsRouter);
 app.use('/v1/growth', growthRouter);
 app.use('/v1/migration', migrationRouter);
+app.use('/v1/progression', progressionRouter);
 
 // ─── Static Files (Dashboard) ────────────────────────────────────────────────
 
@@ -544,6 +546,7 @@ const server = app.listen(PORT, () => {
   startAnchoringSchedule();
   initAdminNotifications();
   initNotificationListeners();
+  initProgressionListeners();
 
   // v44: Initialize WebSocket server for bidirectional communication
   try {

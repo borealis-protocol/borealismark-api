@@ -1023,6 +1023,129 @@ function initSchema(db: Database.Database): void {
       updated_at INTEGER NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
+
+    -- ══════════════════════════════════════════════════════════════════════════
+    -- ACADEMY PROGRESSION SYSTEM (AP/XP Engine)
+    -- ══════════════════════════════════════════════════════════════════════════
+
+    -- ── Level Definitions (static reference table) ─────────────────────────
+    -- Defines the title, tier, and visual identity for each level range.
+    -- min_level/max_level pairs define ranges; XP thresholds computed by engine.
+    CREATE TABLE IF NOT EXISTS level_definitions (
+      id INTEGER PRIMARY KEY,
+      min_level INTEGER NOT NULL,
+      max_level INTEGER NOT NULL,
+      title TEXT NOT NULL,              -- e.g. 'Pathfinder', 'Sage'
+      tier TEXT NOT NULL,               -- e.g. 'Bronze', 'Gold', 'Aurora'
+      tier_color TEXT NOT NULL,         -- hex color for UI rendering
+      is_milestone INTEGER NOT NULL DEFAULT 0, -- 1 = premium tier milestone
+      icon_svg TEXT,                    -- optional SVG for tier badge
+      UNIQUE(min_level, max_level)
+    );
+
+    -- ── User Progression (core state per user) ────────────────────────────
+    -- Single row per user. Updated atomically on every XP/AP change.
+    CREATE TABLE IF NOT EXISTS user_progression (
+      user_id TEXT PRIMARY KEY,
+      xp_total INTEGER NOT NULL DEFAULT 0,       -- lifetime XP earned
+      xp_current_level INTEGER NOT NULL DEFAULT 0, -- XP progress toward next level
+      level INTEGER NOT NULL DEFAULT 1,
+      title TEXT NOT NULL DEFAULT 'Newcomer',
+      tier TEXT NOT NULL DEFAULT 'Basic',
+      tier_color TEXT NOT NULL DEFAULT '#9CA3AF',
+      ap_total INTEGER NOT NULL DEFAULT 0,       -- lifetime AP (contribution score)
+      ap_rank TEXT NOT NULL DEFAULT 'Observer',  -- contribution rank derived from AP
+      current_streak INTEGER NOT NULL DEFAULT 0, -- consecutive login days
+      longest_streak INTEGER NOT NULL DEFAULT 0, -- all-time best streak
+      last_activity_date TEXT,                   -- YYYY-MM-DD of last XP-earning action
+      games_played INTEGER NOT NULL DEFAULT 0,
+      games_won INTEGER NOT NULL DEFAULT 0,
+      articles_read INTEGER NOT NULL DEFAULT 0,
+      contributions INTEGER NOT NULL DEFAULT 0,
+      featured_badge_id TEXT,                    -- user's chosen display badge
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    -- ── XP Transactions (immutable audit trail) ──────────────────────────
+    -- Every XP award is recorded. Enables analytics, dispute resolution,
+    -- and potential future features like XP decay or seasonal resets.
+    CREATE TABLE IF NOT EXISTS xp_transactions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      amount INTEGER NOT NULL,           -- positive = earn, negative = penalty
+      source TEXT NOT NULL,              -- e.g. 'login', 'game_complete', 'article_read'
+      source_id TEXT,                    -- optional reference (game ID, article ID, etc.)
+      description TEXT NOT NULL,
+      balance_after INTEGER NOT NULL,    -- total XP after this transaction
+      level_after INTEGER NOT NULL,      -- level after this transaction
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_xp_tx_user ON xp_transactions(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_xp_tx_source ON xp_transactions(source);
+
+    -- ── AP Transactions (contribution audit trail) ────────────────────────
+    -- AP is earned through contributions: articles, comments, shares, reviews.
+    CREATE TABLE IF NOT EXISTS ap_transactions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      source TEXT NOT NULL,              -- e.g. 'article_publish', 'review', 'share'
+      source_id TEXT,
+      description TEXT NOT NULL,
+      balance_after INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ap_tx_user ON ap_transactions(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ap_tx_source ON ap_transactions(source);
+
+    -- ── Badge Definitions (master catalog) ────────────────────────────────
+    -- All possible badges. New badges can be added without schema changes.
+    CREATE TABLE IF NOT EXISTS badge_definitions (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL,            -- 'learning' | 'contribution' | 'community' | 'special' | 'streak' | 'milestone'
+      icon_svg TEXT NOT NULL,            -- inline SVG for the badge
+      rarity TEXT NOT NULL DEFAULT 'common', -- 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
+      requirement_type TEXT NOT NULL,    -- 'xp_total' | 'level' | 'streak' | 'games_played' | 'contributions' | 'ap_total' | 'manual'
+      requirement_value INTEGER NOT NULL DEFAULT 0, -- threshold to auto-award
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
+    );
+
+    -- ── User Badges (earned badges per user) ──────────────────────────────
+    CREATE TABLE IF NOT EXISTS user_badges (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      badge_id TEXT NOT NULL,
+      earned_at INTEGER NOT NULL,
+      seen INTEGER NOT NULL DEFAULT 0,   -- 0 = unread (show notification)
+      UNIQUE(user_id, badge_id),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (badge_id) REFERENCES badge_definitions(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_badges_user ON user_badges(user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_badges_badge ON user_badges(badge_id);
+
+    -- ── Daily Activity Log (streak and cooldown tracking) ─────────────────
+    -- One row per user per day. Prevents double-counting daily bonuses.
+    CREATE TABLE IF NOT EXISTS daily_activity_log (
+      user_id TEXT NOT NULL,
+      activity_date TEXT NOT NULL,       -- YYYY-MM-DD
+      login_xp_claimed INTEGER NOT NULL DEFAULT 0,
+      games_played INTEGER NOT NULL DEFAULT 0,
+      articles_read INTEGER NOT NULL DEFAULT 0,
+      xp_earned_today INTEGER NOT NULL DEFAULT 0,
+      ap_earned_today INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, activity_date),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_daily_activity_user ON daily_activity_log(user_id, activity_date DESC);
   `);
 
   // Migrate: add CAD pricing + shipping columns to marketplace_listings
@@ -1331,6 +1454,100 @@ function initSchema(db: Database.Database): void {
     // Upgrade legacy master key to full admin scopes
     db.prepare('UPDATE api_keys SET scopes = ? WHERE id = ?')
       .run('audit,read,webhook,admin', existing.id);
+  }
+
+  // ── Seed Level Definitions ──────────────────────────────────────────────
+  {
+    const levelCount = (db.prepare('SELECT COUNT(*) as cnt FROM level_definitions').get() as { cnt: number }).cnt;
+    if (levelCount === 0) {
+      const levels = [
+        [1, 4, 'Newcomer', 'Basic', '#9CA3AF', 0],
+        [5, 9, 'Explorer', 'Basic', '#9CA3AF', 0],
+        [10, 14, 'Pathfinder', 'Bronze', '#CD7F32', 1],
+        [15, 19, 'Analyst', 'Bronze', '#CD7F32', 0],
+        [20, 24, 'Strategist', 'Silver', '#C0C0C0', 1],
+        [25, 29, 'Architect', 'Silver', '#C0C0C0', 0],
+        [30, 34, 'Visionary', 'Gold', '#D4A853', 1],
+        [35, 39, 'Pioneer', 'Gold', '#D4A853', 0],
+        [40, 44, 'Luminary', 'Platinum', '#E5E4E2', 1],
+        [45, 49, 'Oracle', 'Platinum', '#E5E4E2', 0],
+        [50, 54, 'Sage', 'Diamond', '#B9F2FF', 1],
+        [55, 59, 'Sovereign', 'Diamond', '#B9F2FF', 0],
+        [60, 64, 'Ascendant', 'Obsidian', '#3D3D3D', 1],
+        [65, 69, 'Epochal', 'Obsidian', '#3D3D3D', 0],
+        [70, 74, 'Transcendent', 'Aurora', '#8B7EC8', 1],
+        [75, 79, 'Celestial', 'Aurora', '#A594E0', 0],
+        [80, 84, 'Eternal', 'Borealis', '#5C6AC4', 1],
+        [85, 89, 'Mythic', 'Borealis', '#7B86DB', 0],
+        [90, 94, 'Legendary', 'Apex', '#F0C95C', 1],
+        [95, 99, 'Titan', 'Apex', '#F0C95C', 0],
+        [100, 100, 'Borealis Sovereign', 'Crown', '#FFD700', 1],
+      ];
+      const stmt = db.prepare('INSERT INTO level_definitions (min_level, max_level, title, tier, tier_color, is_milestone) VALUES (?, ?, ?, ?, ?, ?)');
+      for (const l of levels) stmt.run(...l);
+      logger.info('Seeded 21 level definitions for Academy progression');
+    }
+  }
+
+  // ── Seed Badge Definitions ────────────────────────────────────────────────
+  {
+    const badgeCount = (db.prepare('SELECT COUNT(*) as cnt FROM badge_definitions').get() as { cnt: number }).cnt;
+    if (badgeCount === 0) {
+      const now = Date.now();
+      const badges = [
+        // Learning badges
+        ['first-steps', 'First Steps', 'Earned your first XP', 'learning', 'common', 'xp_total', 1, 10],
+        ['quick-learner', 'Quick Learner', 'Reached 500 XP', 'learning', 'common', 'xp_total', 500, 20],
+        ['knowledge-seeker', 'Knowledge Seeker', 'Reached 2,500 XP', 'learning', 'uncommon', 'xp_total', 2500, 30],
+        ['scholar', 'Scholar', 'Reached 10,000 XP', 'learning', 'rare', 'xp_total', 10000, 40],
+        ['master-mind', 'Master Mind', 'Reached 50,000 XP', 'learning', 'epic', 'xp_total', 50000, 50],
+        ['enlightened', 'Enlightened', 'Reached 250,000 XP', 'learning', 'legendary', 'xp_total', 250000, 60],
+
+        // Streak badges
+        ['on-fire', 'On Fire', '3-day login streak', 'streak', 'common', 'streak', 3, 100],
+        ['dedicated', 'Dedicated', '7-day login streak', 'streak', 'uncommon', 'streak', 7, 110],
+        ['unstoppable', 'Unstoppable', '14-day login streak', 'streak', 'rare', 'streak', 14, 120],
+        ['relentless', 'Relentless', '30-day login streak', 'streak', 'epic', 'streak', 30, 130],
+        ['eternal-flame', 'Eternal Flame', '100-day login streak', 'streak', 'legendary', 'streak', 100, 140],
+
+        // Game badges
+        ['game-starter', 'Game Starter', 'Played your first game', 'learning', 'common', 'games_played', 1, 200],
+        ['game-enthusiast', 'Game Enthusiast', 'Played 25 games', 'learning', 'uncommon', 'games_played', 25, 210],
+        ['game-master', 'Game Master', 'Played 100 games', 'learning', 'rare', 'games_played', 100, 220],
+
+        // Contribution badges
+        ['first-voice', 'First Voice', 'Made your first contribution', 'contribution', 'common', 'contributions', 1, 300],
+        ['active-contributor', 'Active Contributor', '10 contributions', 'contribution', 'uncommon', 'contributions', 10, 310],
+        ['thought-leader', 'Thought Leader', '50 contributions', 'contribution', 'rare', 'contributions', 50, 320],
+        ['community-pillar', 'Community Pillar', '200 contributions', 'contribution', 'epic', 'contributions', 200, 330],
+
+        // Milestone badges (level-based)
+        ['level-10', 'Bronze Ascension', 'Reached Level 10', 'milestone', 'uncommon', 'level', 10, 400],
+        ['level-25', 'Silver Ascension', 'Reached Level 25', 'milestone', 'rare', 'level', 25, 410],
+        ['level-50', 'Diamond Ascension', 'Reached Level 50', 'milestone', 'epic', 'level', 50, 420],
+        ['level-75', 'Aurora Ascension', 'Reached Level 75', 'milestone', 'legendary', 'level', 75, 430],
+        ['level-100', 'Crown Bearer', 'Reached Level 100 — Borealis Sovereign', 'milestone', 'legendary', 'level', 100, 440],
+
+        // Special / founding badges
+        ['founding-member', 'Founding Member', 'Joined during Academy beta', 'special', 'legendary', 'manual', 0, 500],
+        ['early-adopter', 'Early Adopter', 'Among the first 100 users', 'special', 'epic', 'manual', 0, 510],
+
+        // AP rank badges
+        ['contributor-bronze', 'Bronze Contributor', 'Earned 100 AP', 'contribution', 'common', 'ap_total', 100, 600],
+        ['contributor-silver', 'Silver Contributor', 'Earned 500 AP', 'contribution', 'uncommon', 'ap_total', 500, 610],
+        ['contributor-gold', 'Gold Contributor', 'Earned 2,000 AP', 'contribution', 'rare', 'ap_total', 2000, 620],
+        ['contributor-diamond', 'Diamond Contributor', 'Earned 10,000 AP', 'contribution', 'epic', 'ap_total', 10000, 630],
+      ];
+
+      // Generic SVG badge icon (category-colored in frontend)
+      const defaultSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
+
+      const stmt = db.prepare('INSERT INTO badge_definitions (id, name, description, category, icon_svg, rarity, requirement_type, requirement_value, sort_order, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)');
+      for (const b of badges) {
+        stmt.run(b[0], b[1], b[2], b[3], defaultSvg, b[4], b[5], b[6], b[7], now);
+      }
+      logger.info(`Seeded ${badges.length} badge definitions for Academy progression`);
+    }
   }
 }
 
@@ -4228,4 +4445,352 @@ export function updateNotificationPreferences(userId: string, prefs: Partial<Omi
   );
 
   return getNotificationPreferences(userId);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ACADEMY PROGRESSION ENGINE
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * XP required to reach a given level from level 1.
+ * Formula: 100 * level^1.5 (cumulative)
+ * Level 1→2: 100 XP,  Level 10→11: ~3,162 XP,  Level 50→51: ~35,355 XP
+ */
+export function xpForLevel(level: number): number {
+  if (level <= 1) return 0;
+  return Math.floor(100 * Math.pow(level, 1.5));
+}
+
+/** Total cumulative XP needed to reach a level */
+export function cumulativeXpForLevel(level: number): number {
+  let total = 0;
+  for (let i = 2; i <= level; i++) {
+    total += xpForLevel(i);
+  }
+  return total;
+}
+
+/** Calculate level from total XP */
+export function levelFromXp(totalXp: number): number {
+  let level = 1;
+  let cumulative = 0;
+  while (level < 100) {
+    const needed = xpForLevel(level + 1);
+    if (cumulative + needed > totalXp) break;
+    cumulative += needed;
+    level++;
+  }
+  return level;
+}
+
+/** Get title and tier for a given level */
+export function getTitleForLevel(level: number): { title: string; tier: string; tierColor: string } {
+  const row = getDb().prepare(
+    'SELECT title, tier, tier_color FROM level_definitions WHERE min_level <= ? AND max_level >= ?'
+  ).get(level, level) as { title: string; tier: string; tier_color: string } | undefined;
+  return row
+    ? { title: row.title, tier: row.tier, tierColor: row.tier_color }
+    : { title: 'Newcomer', tier: 'Basic', tierColor: '#9CA3AF' };
+}
+
+/** AP rank derived from total AP */
+export function apRankFromTotal(apTotal: number): string {
+  if (apTotal >= 10000) return 'Diamond Contributor';
+  if (apTotal >= 2000) return 'Gold Contributor';
+  if (apTotal >= 500) return 'Silver Contributor';
+  if (apTotal >= 100) return 'Bronze Contributor';
+  if (apTotal >= 25) return 'Active Voice';
+  if (apTotal >= 1) return 'Participant';
+  return 'Observer';
+}
+
+/** Ensure user_progression row exists for a user */
+export function ensureUserProgression(userId: string): void {
+  const exists = getDb().prepare('SELECT 1 FROM user_progression WHERE user_id = ?').get(userId);
+  if (!exists) {
+    const now = Date.now();
+    getDb().prepare(`
+      INSERT INTO user_progression (user_id, xp_total, xp_current_level, level, title, tier, tier_color, ap_total, ap_rank, current_streak, longest_streak, created_at, updated_at)
+      VALUES (?, 0, 0, 1, 'Newcomer', 'Basic', '#9CA3AF', 0, 'Observer', 0, 0, ?, ?)
+    `).run(userId, now, now);
+  }
+}
+
+/** Get a user's full progression state */
+export function getUserProgression(userId: string): any {
+  ensureUserProgression(userId);
+  const row = getDb().prepare('SELECT * FROM user_progression WHERE user_id = ?').get(userId) as Record<string, any>;
+  const level = row.level as number;
+  const xpTotal = row.xp_total as number;
+  const currentLevelCumulative = cumulativeXpForLevel(level);
+  const nextLevelCumulative = cumulativeXpForLevel(level + 1);
+  const xpIntoCurrentLevel = xpTotal - currentLevelCumulative;
+  const xpNeededForNext = nextLevelCumulative - currentLevelCumulative;
+
+  return {
+    userId: row.user_id,
+    xpTotal: row.xp_total,
+    xpIntoCurrentLevel,
+    xpNeededForNext,
+    xpProgress: xpNeededForNext > 0 ? Math.min(1, xpIntoCurrentLevel / xpNeededForNext) : 1,
+    level: row.level,
+    title: row.title,
+    tier: row.tier,
+    tierColor: row.tier_color,
+    apTotal: row.ap_total,
+    apRank: row.ap_rank,
+    currentStreak: row.current_streak,
+    longestStreak: row.longest_streak,
+    lastActivityDate: row.last_activity_date,
+    gamesPlayed: row.games_played,
+    gamesWon: row.games_won,
+    articlesRead: row.articles_read,
+    contributions: row.contributions,
+    featuredBadgeId: row.featured_badge_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * Award XP to a user. Handles leveling, title changes, and badge checks.
+ * Returns the transaction and any level-up info.
+ */
+export function awardXp(userId: string, amount: number, source: string, description: string, sourceId?: string): {
+  transaction: any;
+  leveledUp: boolean;
+  newLevel?: number;
+  newTitle?: string;
+  newTier?: string;
+  badgesEarned: string[];
+} {
+  ensureUserProgression(userId);
+  const db = getDb();
+
+  const prog = db.prepare('SELECT * FROM user_progression WHERE user_id = ?').get(userId) as Record<string, any>;
+  const oldLevel = prog.level as number;
+  const newXpTotal = (prog.xp_total as number) + amount;
+  const newLevel = Math.min(100, levelFromXp(newXpTotal));
+  const { title, tier, tierColor } = getTitleForLevel(newLevel);
+  const leveledUp = newLevel > oldLevel;
+
+  // Update today's activity
+  const today = new Date().toISOString().slice(0, 10);
+  db.prepare(`
+    INSERT INTO daily_activity_log (user_id, activity_date, xp_earned_today)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id, activity_date) DO UPDATE SET xp_earned_today = xp_earned_today + ?
+  `).run(userId, today, amount, amount);
+
+  // Update streak
+  let currentStreak = prog.current_streak as number;
+  let longestStreak = prog.longest_streak as number;
+  const lastDate = prog.last_activity_date as string | null;
+  if (lastDate !== today) {
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    if (lastDate === yesterday) {
+      currentStreak += 1;
+    } else if (lastDate !== today) {
+      currentStreak = 1; // streak broken
+    }
+    if (currentStreak > longestStreak) longestStreak = currentStreak;
+  }
+
+  // Record transaction
+  const txId = uuidv4();
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO xp_transactions (id, user_id, amount, source, source_id, description, balance_after, level_after, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(txId, userId, amount, source, sourceId ?? null, description, newXpTotal, newLevel, now);
+
+  // Update progression
+  const xpCurrentLevel = newXpTotal - cumulativeXpForLevel(newLevel);
+  db.prepare(`
+    UPDATE user_progression SET
+      xp_total = ?, xp_current_level = ?, level = ?, title = ?, tier = ?, tier_color = ?,
+      current_streak = ?, longest_streak = ?, last_activity_date = ?, updated_at = ?
+    WHERE user_id = ?
+  `).run(newXpTotal, xpCurrentLevel, newLevel, title, tier, tierColor, currentStreak, longestStreak, today, now, userId);
+
+  // Check and award badges
+  const badgesEarned = checkAndAwardBadges(userId, {
+    xpTotal: newXpTotal,
+    level: newLevel,
+    streak: currentStreak,
+    gamesPlayed: prog.games_played as number,
+    contributions: prog.contributions as number,
+    apTotal: prog.ap_total as number,
+  });
+
+  return {
+    transaction: { id: txId, amount, source, description, balanceAfter: newXpTotal, levelAfter: newLevel },
+    leveledUp,
+    newLevel: leveledUp ? newLevel : undefined,
+    newTitle: leveledUp ? title : undefined,
+    newTier: leveledUp ? tier : undefined,
+    badgesEarned,
+  };
+}
+
+/**
+ * Award AP (contribution points) to a user.
+ */
+export function awardAp(userId: string, amount: number, source: string, description: string, sourceId?: string): {
+  transaction: any;
+  badgesEarned: string[];
+} {
+  ensureUserProgression(userId);
+  const db = getDb();
+
+  const prog = db.prepare('SELECT ap_total, contributions FROM user_progression WHERE user_id = ?').get(userId) as { ap_total: number; contributions: number };
+  const newApTotal = prog.ap_total + amount;
+  const newRank = apRankFromTotal(newApTotal);
+  const now = Date.now();
+
+  const txId = uuidv4();
+  db.prepare(`
+    INSERT INTO ap_transactions (id, user_id, amount, source, source_id, description, balance_after, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(txId, userId, amount, source, sourceId ?? null, description, newApTotal, now);
+
+  db.prepare(`
+    UPDATE user_progression SET ap_total = ?, ap_rank = ?, contributions = contributions + 1, updated_at = ?
+    WHERE user_id = ?
+  `).run(newApTotal, newRank, now, userId);
+
+  const today = new Date().toISOString().slice(0, 10);
+  db.prepare(`
+    INSERT INTO daily_activity_log (user_id, activity_date, ap_earned_today)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id, activity_date) DO UPDATE SET ap_earned_today = ap_earned_today + ?
+  `).run(userId, today, amount, amount);
+
+  const badgesEarned = checkAndAwardBadges(userId, {
+    xpTotal: 0, level: 0, streak: 0, gamesPlayed: 0,
+    contributions: prog.contributions + 1,
+    apTotal: newApTotal,
+  });
+
+  return {
+    transaction: { id: txId, amount, source, description, balanceAfter: newApTotal },
+    badgesEarned,
+  };
+}
+
+/** Increment games_played counter and optionally games_won */
+export function recordGamePlayed(userId: string, won: boolean): void {
+  ensureUserProgression(userId);
+  const db = getDb();
+  if (won) {
+    db.prepare('UPDATE user_progression SET games_played = games_played + 1, games_won = games_won + 1, updated_at = ? WHERE user_id = ?').run(Date.now(), userId);
+  } else {
+    db.prepare('UPDATE user_progression SET games_played = games_played + 1, updated_at = ? WHERE user_id = ?').run(Date.now(), userId);
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  db.prepare(`
+    INSERT INTO daily_activity_log (user_id, activity_date, games_played)
+    VALUES (?, ?, 1)
+    ON CONFLICT(user_id, activity_date) DO UPDATE SET games_played = games_played + 1
+  `).run(userId, today);
+}
+
+/**
+ * Check all badge requirements and award any newly-earned badges.
+ * Returns array of badge IDs that were newly earned.
+ */
+export function checkAndAwardBadges(userId: string, stats: {
+  xpTotal: number; level: number; streak: number;
+  gamesPlayed: number; contributions: number; apTotal: number;
+}): string[] {
+  const db = getDb();
+  const allBadges = db.prepare(
+    'SELECT id, requirement_type, requirement_value FROM badge_definitions WHERE active = 1 AND requirement_type != ?'
+  ).all('manual') as Array<{ id: string; requirement_type: string; requirement_value: number }>;
+
+  const earned = db.prepare('SELECT badge_id FROM user_badges WHERE user_id = ?').all(userId) as Array<{ badge_id: string }>;
+  const earnedSet = new Set(earned.map(e => e.badge_id));
+  const newBadges: string[] = [];
+  const now = Date.now();
+
+  for (const badge of allBadges) {
+    if (earnedSet.has(badge.id)) continue;
+
+    let qualifies = false;
+    switch (badge.requirement_type) {
+      case 'xp_total': qualifies = stats.xpTotal >= badge.requirement_value; break;
+      case 'level': qualifies = stats.level >= badge.requirement_value; break;
+      case 'streak': qualifies = stats.streak >= badge.requirement_value; break;
+      case 'games_played': qualifies = stats.gamesPlayed >= badge.requirement_value; break;
+      case 'contributions': qualifies = stats.contributions >= badge.requirement_value; break;
+      case 'ap_total': qualifies = stats.apTotal >= badge.requirement_value; break;
+    }
+
+    if (qualifies) {
+      const badgeRowId = uuidv4();
+      try {
+        db.prepare('INSERT INTO user_badges (id, user_id, badge_id, earned_at) VALUES (?, ?, ?, ?)').run(badgeRowId, userId, badge.id, now);
+        newBadges.push(badge.id);
+      } catch { /* unique constraint — already earned */ }
+    }
+  }
+
+  return newBadges;
+}
+
+/** Get all badges earned by a user */
+export function getUserBadges(userId: string): any[] {
+  return getDb().prepare(`
+    SELECT ub.badge_id, ub.earned_at, ub.seen,
+           bd.name, bd.description, bd.category, bd.icon_svg, bd.rarity, bd.sort_order
+    FROM user_badges ub
+    JOIN badge_definitions bd ON bd.id = ub.badge_id
+    WHERE ub.user_id = ?
+    ORDER BY bd.sort_order ASC
+  `).all(userId) as any[];
+}
+
+/** Get all available badge definitions */
+export function getAllBadgeDefinitions(): any[] {
+  return getDb().prepare(
+    'SELECT id, name, description, category, icon_svg, rarity, requirement_type, requirement_value, sort_order FROM badge_definitions WHERE active = 1 ORDER BY sort_order ASC'
+  ).all() as any[];
+}
+
+/** Mark badges as seen (dismiss notification) */
+export function markBadgesSeen(userId: string, badgeIds: string[]): void {
+  const stmt = getDb().prepare('UPDATE user_badges SET seen = 1 WHERE user_id = ? AND badge_id = ?');
+  for (const bid of badgeIds) stmt.run(userId, bid);
+}
+
+/** Set a user's featured badge */
+export function setFeaturedBadge(userId: string, badgeId: string | null): void {
+  getDb().prepare('UPDATE user_progression SET featured_badge_id = ?, updated_at = ? WHERE user_id = ?')
+    .run(badgeId, Date.now(), userId);
+}
+
+/** Get XP transaction history for a user (paginated) */
+export function getXpHistory(userId: string, limit = 20, offset = 0): any[] {
+  return getDb().prepare(
+    'SELECT id, amount, source, source_id, description, balance_after, level_after, created_at FROM xp_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
+  ).all(userId, limit, offset) as any[];
+}
+
+/** Get AP transaction history for a user (paginated) */
+export function getApHistory(userId: string, limit = 20, offset = 0): any[] {
+  return getDb().prepare(
+    'SELECT id, amount, source, source_id, description, balance_after, created_at FROM ap_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
+  ).all(userId, limit, offset) as any[];
+}
+
+/** Leaderboard: top users by level/XP */
+export function getLeaderboard(limit = 25): any[] {
+  return getDb().prepare(`
+    SELECT up.user_id, u.name, u.email, up.level, up.xp_total, up.title, up.tier, up.tier_color, up.ap_total, up.ap_rank,
+           up.current_streak, up.featured_badge_id
+    FROM user_progression up
+    JOIN users u ON u.id = up.user_id AND u.active = 1
+    ORDER BY up.xp_total DESC
+    LIMIT ?
+  `).all(limit) as any[];
 }

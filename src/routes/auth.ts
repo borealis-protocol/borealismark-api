@@ -327,6 +327,28 @@ router.get('/me', requireAuth, (req: Request, res: Response) => {
   // Compute trust score on profile fetch
   const trustScore = computeAndStoreTrustScore(user.id);
 
+  // Include Academy progression data if exists
+  let progression: any = null;
+  try {
+    const { getUserProgression, getUserBadges } = require('../db/database');
+    const prog = getUserProgression(user.id);
+    const badges = getUserBadges(user.id);
+    progression = {
+      level: prog.level,
+      title: prog.title,
+      tier: prog.tier,
+      tierColor: prog.tierColor,
+      xpTotal: prog.xpTotal,
+      xpProgress: prog.xpProgress,
+      xpNeededForNext: prog.xpNeededForNext,
+      apTotal: prog.apTotal,
+      apRank: prog.apRank,
+      currentStreak: prog.currentStreak,
+      badgeCount: badges.length,
+      featuredBadgeId: prog.featuredBadgeId,
+    };
+  } catch { /* progression tables may not exist yet */ }
+
   res.json({
     success: true,
     data: {
@@ -342,6 +364,7 @@ router.get('/me', requireAuth, (req: Request, res: Response) => {
       emailVerified: user.emailVerified,
       trustScore: trustScore.totalScore,
       trustLevel: trustScore.trustLevel,
+      progression,
     },
   });
 });

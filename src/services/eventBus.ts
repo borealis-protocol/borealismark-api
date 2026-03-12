@@ -725,3 +725,126 @@ export function initNotificationListeners(): void {
 
   logger.info('In-app notification listeners initialized (Signal Tower v40)');
 }
+
+// ─── Academy Progression Listeners ──────────────────────────────────────────
+// Auto-award XP/AP when platform events fire. This makes the progression
+// system fully autonomous — no manual intervention needed.
+
+export function initProgressionListeners(): void {
+  // ── Registration → 50 XP welcome bonus ──────────────────────────────────
+  onEvent(EventTypes.USER_REGISTERED, (event) => {
+    try {
+      const userId = event.actorId;
+      if (!userId) return;
+      const { awardXp, ensureUserProgression } = require('../db/database');
+      ensureUserProgression(userId);
+      awardXp(userId, 50, 'registration', 'Welcome to Borealis Academy!');
+      logger.info('Progression: awarded registration XP', { userId });
+    } catch (err: any) {
+      logger.error('Progression registration XP error', { error: err.message });
+    }
+  });
+
+  // ── Login → 10 XP daily (first login of day only) ──────────────────────
+  onEvent(EventTypes.USER_LOGIN, (event) => {
+    try {
+      const userId = event.actorId;
+      if (!userId) return;
+      const { ensureUserProgression, awardXp, getDb } = require('../db/database');
+      ensureUserProgression(userId);
+
+      const today = new Date().toISOString().slice(0, 10);
+      const todayLog = getDb().prepare(
+        'SELECT login_xp_claimed FROM daily_activity_log WHERE user_id = ? AND activity_date = ?'
+      ).get(userId, today) as { login_xp_claimed: number } | undefined;
+
+      if (!todayLog || !todayLog.login_xp_claimed) {
+        // First login of the day
+        awardXp(userId, 10, 'daily_login', 'Daily login bonus');
+        getDb().prepare(`
+          INSERT INTO daily_activity_log (user_id, activity_date, login_xp_claimed)
+          VALUES (?, ?, 1)
+          ON CONFLICT(user_id, activity_date) DO UPDATE SET login_xp_claimed = 1
+        `).run(userId, today);
+      }
+    } catch (err: any) {
+      logger.error('Progression login XP error', { error: err.message });
+    }
+  });
+
+  // ── Listing Created → 25 XP + 10 AP ────────────────────────────────────
+  onEvent(EventTypes.LISTING_CREATED, (event) => {
+    try {
+      const userId = event.actorId;
+      if (!userId) return;
+      const { awardXp, awardAp, ensureUserProgression } = require('../db/database');
+      ensureUserProgression(userId);
+      awardXp(userId, 25, 'listing_created', 'Created a marketplace listing', event.targetId);
+      awardAp(userId, 10, 'listing_created', 'Published a listing', event.targetId);
+    } catch (err: any) {
+      logger.error('Progression listing XP error', { error: err.message });
+    }
+  });
+
+  // ── Order Settled → 100 XP for both buyer and seller ──────────────────
+  onEvent(EventTypes.ORDER_SETTLED, (event) => {
+    try {
+      const { awardXp, ensureUserProgression } = require('../db/database');
+      const { buyerId, sellerId } = event.payload ?? {};
+      if (buyerId) {
+        ensureUserProgression(buyerId);
+        awardXp(buyerId, 100, 'order_settled', 'Completed a purchase', event.targetId);
+      }
+      if (sellerId) {
+        ensureUserProgression(sellerId);
+        awardXp(sellerId, 100, 'order_settled', 'Completed a sale', event.targetId);
+      }
+    } catch (err: any) {
+      logger.error('Progression order XP error', { error: err.message });
+    }
+  });
+
+  // ── Email Verified → 25 XP ─────────────────────────────────────────────
+  onEvent(EventTypes.USER_VERIFIED, (event) => {
+    try {
+      const userId = event.actorId;
+      if (!userId) return;
+      const { awardXp, ensureUserProgression } = require('../db/database');
+      ensureUserProgression(userId);
+      awardXp(userId, 25, 'email_verified', 'Verified email address');
+    } catch (err: any) {
+      logger.error('Progression verification XP error', { error: err.message });
+    }
+  });
+
+  // ── Subscription Created → 200 XP ─────────────────────────────────────
+  onEvent(EventTypes.SUBSCRIPTION_CREATED, (event) => {
+    try {
+      const userId = event.actorId;
+      if (!userId) return;
+      const { awardXp, ensureUserProgression } = require('../db/database');
+      ensureUserProgression(userId);
+      awardXp(userId, 200, 'subscription', `Upgraded to ${event.payload?.tier || 'premium'} plan`);
+    } catch (err: any) {
+      logger.error('Progression subscription XP error', { error: err.message });
+    }
+  });
+
+  // ── Bot Job Completed → 30 XP for bot owner ──────────────────────────
+  onEvent(EventTypes.BOT_JOB_COMPLETED, (event) => {
+    try {
+      const botId = event.actorId;
+      if (!botId) return;
+      const { getDb, awardXp, ensureUserProgression } = require('../db/database');
+      const bot = getDb().prepare('SELECT owner_id FROM bots WHERE id = ?').get(botId) as { owner_id: string } | undefined;
+      if (bot) {
+        ensureUserProgression(bot.owner_id);
+        awardXp(bot.owner_id, 30, 'bot_job_completed', 'Your bot completed a job', event.targetId);
+      }
+    } catch (err: any) {
+      logger.error('Progression bot XP error', { error: err.message });
+    }
+  });
+
+  logger.info('Academy progression listeners initialized');
+}
