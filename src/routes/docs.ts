@@ -1,11 +1,12 @@
 import { Router, type Request, type Response } from 'express';
 import path from 'path';
 import fs from 'fs';
+import { requireAuth } from './auth';
 
 const router = Router();
 
-// Serve OpenAPI spec as YAML
-router.get('/openapi.json', (_req: Request, res: Response) => {
+// Serve OpenAPI spec as YAML — requires valid JWT
+router.get('/openapi.json', requireAuth, (_req: Request, res: Response) => {
   try {
     // Try to read from src directory first (development)
     let yamlPath = path.join(process.cwd(), 'src', 'docs', 'openapi.yaml');
@@ -25,8 +26,8 @@ router.get('/openapi.json', (_req: Request, res: Response) => {
   }
 });
 
-// Serve Swagger UI HTML
-router.get('/', (_req: Request, res: Response) => {
+// Serve Swagger UI HTML — requires valid JWT
+router.get('/', requireAuth, (_req: Request, res: Response) => {
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
