@@ -1401,15 +1401,19 @@ function initSchema(db: Database.Database): void {
   `).all() as any[];
 
   if (staleImageListings.length > 0) {
+    // SAFETY FIX: Mark as needing review instead of deleting permanently.
+    // Previous behavior permanently deleted listings with placeholder images,
+    // which caused data loss when eBay served different image URLs.
     db.prepare(
-      `DELETE FROM marketplace_listings
+      `UPDATE marketplace_listings
+       SET sync_status = 'needs_image_fix'
        WHERE origin = 'imported' AND status IN ('active', 'published')
          AND (
            (images LIKE '%s-l500%' AND images NOT LIKE '%s-l1600%')
            OR (images = '[]' AND sync_status = 'stale')
          )`
     ).run();
-    logger.info(`[Migration Officer] Removed ${staleImageListings.length} delisted eBay listings with invalid images`);
+    logger.info(`[Migration Officer] Flagged ${staleImageListings.length} listings with stale images for re-import (not deleted)`);
   }
 
   // ── Migration Officer: Async sold-listing sync on startup ──────────────────
@@ -1423,19 +1427,12 @@ function initSchema(db: Database.Database): void {
   `).get() as any;
 
   if (importedActiveCount?.cnt > 0) {
-    logger.info(`[Migration Officer] ${importedActiveCount.cnt} imported listings to check — starting background sold sync (batch of 50)...`);
-    // Dynamic import to avoid circular dependency
-    import('../services/ebayScraper').then(({ syncSoldListings }) => {
-      syncSoldListings(undefined, 50)
-        .then((result) => {
-          logger.info(`[Migration Officer] Startup sold sync complete: ${result.markedSold} sold, ${result.markedDelisted} delisted, ${result.stillActive} active, ${result.errors} errors`);
-        })
-        .catch((err: any) => {
-          logger.error(`[Migration Officer] Startup sold sync failed: ${err.message}`);
-        });
-    }).catch((err: any) => {
-      logger.error(`[Migration Officer] Failed to load ebayScraper for sold sync: ${err.message}`);
-    });
+    // SAFETY FIX: Disabled automatic startup sync. Previously this ran on every
+    // server restart/deploy and checked 50 listings, which caused false positives
+    // (active listings marked as delisted) due to unreliable HTML-size-based detection.
+    // The sync should ONLY run via explicit API call (POST /v1/migration/sync/run/:id)
+    // or scheduled webhook — never automatically on server startup.
+    logger.info(`[Migration Officer] ${importedActiveCount.cnt} imported listings exist. Startup auto-sync DISABLED (use API endpoint for manual sync).`);
   }
 
   // Ensure the master API key exists with full admin scopes

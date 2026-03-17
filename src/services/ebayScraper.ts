@@ -321,13 +321,23 @@ export async function checkListingAvailability(
                          html.includes('Bidding has ended') ||
                          html.includes('This listing was ended');
 
+    // Check for definitive eBay error/removal page indicators
+    const hasErrorPage = html.includes('This listing is no longer available') ||
+                         html.includes('The item you selected is no longer available') ||
+                         html.includes('This item has been removed');
+
     if (hasOutOfStock || hasEndedText) return 'sold';
     if (hasInStock) return 'in_stock';
 
-    // No clear signal — treat as delisted if the page is very small
-    if (html.length < 200000) return 'delisted';
+    // Only mark delisted if BOTH the page is small AND we see error page indicators
+    // Previously any page < 200KB was marked delisted — this caused false positives
+    // when eBay served smaller pages due to A/B testing, network issues, or layout changes
+    if (html.length < 150000 && hasErrorPage) return 'delisted';
 
-    // Large page but no availability markers — assume still active (eBay A/B testing)
+    // SAFE DEFAULT: When in doubt, assume the listing is still active.
+    // False negatives (missing a delisted item) are much less harmful than
+    // false positives (deleting an active listing from the storefront).
+    logger.info(`[eBay Scraper] Ambiguous availability for ${itemUrl} (${html.length} bytes, no schema markers) — defaulting to in_stock`);
     return 'in_stock';
   } catch (err: any) {
     logger.error(`[eBay Scraper] Availability check failed for ${itemUrl}: ${err.message}`);
@@ -370,7 +380,7 @@ export async function syncSoldListings(
       FROM marketplace_listings
       WHERE origin = 'imported'
         AND status IN ('published', 'active')
-        AND sync_status = 'active'
+        AND sync_status IN ('active', 'pending_delist')
         AND external_url IS NOT NULL
         AND external_url != ''
         AND user_id = ?
@@ -383,7 +393,7 @@ export async function syncSoldListings(
       FROM marketplace_listings
       WHERE origin = 'imported'
         AND status IN ('published', 'active')
-        AND sync_status = 'active'
+        AND sync_status IN ('active', 'pending_delist')
         AND external_url IS NOT NULL
         AND external_url != ''
       ORDER BY last_synced_at ASC NULLS FIRST
@@ -438,31 +448,64 @@ export async function syncSoldListings(
         logger.info(`[Migration Officer] SOLD: ${listing.title.substring(0, 50)} (${listing.external_url})`);
 
       } else if (availability === 'delisted') {
-        // eBay listing is gone entirely — remove from store
-        db.prepare(`
-          UPDATE marketplace_listings
-          SET status = 'delisted', sync_status = 'delisted', updated_at = ?
-          WHERE id = ?
-        `).run(now, listing.id);
+        // eBay listing appears to be gone — QUARANTINE instead of immediate removal.
+        // Use sync_status = 'pending_delist' so it gets re-checked next sync cycle.
+        // Only truly remove after TWO consecutive delist detections (confirmed by checking
+        // if sync_status is already 'pending_delist' from a previous run).
+        const currentSyncStatus = listing.sync_status;
 
-        logListingActivity({
-          listingId: listing.id,
-          userId: listing.user_id,
-          agentName: 'Migration Officer',
-          taskType: 'migration_sync',
-          platform: 'ebay',
-          status: 'completed',
-          statusMessage: `eBay listing removed/delisted — hidden from storefront`,
-          metadata: {
-            action: 'sold_sync',
-            source: listing.external_url,
-            detectedStatus: 'delisted'
-          }
-        });
+        if (currentSyncStatus === 'pending_delist') {
+          // Second consecutive delist detection — confirmed, mark as delisted
+          db.prepare(`
+            UPDATE marketplace_listings
+            SET status = 'delisted', sync_status = 'delisted', updated_at = ?
+            WHERE id = ?
+          `).run(now, listing.id);
 
-        markedDelisted++;
-        details.push({ id: listing.id, title: listing.title, externalUrl: listing.external_url, result: 'delisted' });
-        logger.info(`[Migration Officer] DELISTED: ${listing.title.substring(0, 50)} (${listing.external_url})`);
+          logListingActivity({
+            listingId: listing.id,
+            userId: listing.user_id,
+            agentName: 'Migration Officer',
+            taskType: 'migration_sync',
+            platform: 'ebay',
+            status: 'completed',
+            statusMessage: `eBay listing confirmed removed after 2 checks — hidden from storefront`,
+            metadata: {
+              action: 'sold_sync',
+              source: listing.external_url,
+              detectedStatus: 'delisted_confirmed'
+            }
+          });
+
+          markedDelisted++;
+          details.push({ id: listing.id, title: listing.title, externalUrl: listing.external_url, result: 'delisted_confirmed' });
+          logger.info(`[Migration Officer] DELISTED (confirmed): ${listing.title.substring(0, 50)} (${listing.external_url})`);
+        } else {
+          // First delist detection — quarantine, don't remove yet
+          db.prepare(`
+            UPDATE marketplace_listings
+            SET sync_status = 'pending_delist', updated_at = ?
+            WHERE id = ?
+          `).run(now, listing.id);
+
+          logListingActivity({
+            listingId: listing.id,
+            userId: listing.user_id,
+            agentName: 'Migration Officer',
+            taskType: 'migration_sync',
+            platform: 'ebay',
+            status: 'completed',
+            statusMessage: `eBay listing may be removed — quarantined for re-check next cycle`,
+            metadata: {
+              action: 'sold_sync',
+              source: listing.external_url,
+              detectedStatus: 'pending_delist'
+            }
+          });
+
+          details.push({ id: listing.id, title: listing.title, externalUrl: listing.external_url, result: 'quarantined' });
+          logger.info(`[Migration Officer] QUARANTINED: ${listing.title.substring(0, 50)} — will confirm on next sync`);
+        }
 
       } else if (availability === 'in_stock') {
         stillActive++;
