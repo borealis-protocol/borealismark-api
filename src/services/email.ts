@@ -686,7 +686,7 @@ export async function sendAdminNewUserNotification(
       <div class="divider"></div>
       <p class="detail" style="color:#666">View all users in the admin dashboard.</p>
     </div>
-    <div class="footer">&copy; ${new Date().getFullYear()} BorealisMark Protocol — Admin Notification</div>
+    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol — Admin Notification</div>
   </div>
 </body>
 </html>`;
@@ -777,7 +777,7 @@ export async function sendAdminSubscriptionNotification(
       <p class="detail"><strong>User ID:</strong> <span style="font-family:monospace;font-size:12px">${userId}</span></p>
       <p class="detail"><strong>Time:</strong> ${timestamp}</p>
     </div>
-    <div class="footer">&copy; ${new Date().getFullYear()} BorealisMark Protocol — Admin Notification</div>
+    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol — Admin Notification</div>
   </div>
 </body>
 </html>`;
@@ -858,7 +858,7 @@ export async function sendAdminVerificationNotification(
       <div class="divider"></div>
       <p class="detail" style="color:#666">Review and approve or reject in the admin dashboard.</p>
     </div>
-    <div class="footer">&copy; ${new Date().getFullYear()} BorealisMark Protocol — Admin Notification</div>
+    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol — Admin Notification</div>
   </div>
 </body>
 </html>`;

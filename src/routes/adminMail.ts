@@ -201,7 +201,7 @@ function buildHtmlEmail(body: string, subject: string): string {
     <div class="logo"><span>Borealis</span>Mark</div>
     <div class="body-text">${body.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</div>
   </div>
-  <div class="footer">BorealisMark Protocol &mdash; Blockchain-Anchored AI Trust</div>
+  <div class="footer">The Borealis Protocol &mdash; Blockchain-Anchored AI Trust</div>
 </div>
 </body>
 </html>`;
