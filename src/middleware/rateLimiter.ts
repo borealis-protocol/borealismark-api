@@ -124,3 +124,27 @@ export const penaltyLimiter = rateLimit({
     return authReq.apiKey?.id ?? req.ip ?? 'unknown';
   },
 });
+
+// ─── Per-User Message Limiter ─────────────────────────────────────────────────
+// 10 messages per minute per authenticated user — prevents spam flooding
+// in marketplace conversations while allowing normal conversation flow.
+
+export const userMessageLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req: Request, res: Response): void => {
+    res.status(429).json({
+      success: false,
+      error: 'Message rate limit exceeded. You can send up to 10 messages per minute.',
+      code: 'MESSAGE_RATE_LIMIT',
+      timestamp: Date.now(),
+    });
+  },
+  keyGenerator: (req: Request): string => {
+    // Key by authenticated user ID, fall back to IP
+    const authReq = req as any;
+    return authReq.user?.sub ?? req.ip ?? 'unknown';
+  },
+});

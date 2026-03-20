@@ -42,6 +42,7 @@ import { z } from 'zod';
 import { v4 as uuid } from 'uuid';
 import { requireAuth, type AuthRequest } from './auth';
 import { logger } from '../middleware/logger';
+import { userMessageLimiter } from '../middleware/rateLimiter';
 import { getDb, createStorefront, getStorefrontBySlug, getStorefrontByUserId, updateStorefront, getUserSanction, addViolation, upsertUserSanction, getViolationCount, getUserViolations, getAllViolations, getAllSanctions, getUserTrustLevel, computeAndStoreTrustScore } from '../db/database';
 import {
   USDC_TOKEN_ID,
@@ -1322,7 +1323,7 @@ router.get('/threads/:id', requireAuth, async (req: Request, res: Response) => {
  *   3. Block if critical/major violations found
  *   4. Log violations and apply escalating sanctions
  */
-router.post('/threads/:id/messages', requireAuth, async (req: Request, res: Response) => {
+router.post('/threads/:id/messages', requireAuth, userMessageLimiter, async (req: Request, res: Response) => {
   try {
     const authReq = req as AuthRequest;
     const userId = authReq.user?.sub;

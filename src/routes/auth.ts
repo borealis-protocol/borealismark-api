@@ -123,17 +123,20 @@ export interface AuthRequest extends Request {
 }
 
 /**
- * Middleware: extract and verify JWT from Authorization header.
+ * Middleware: extract and verify JWT from Authorization header or HttpOnly cookie.
  * Attaches decoded payload to req.user.
+ * Supports both Bearer token (Authorization header) and HttpOnly cookie (bm_token).
  */
 export function requireAuth(req: Request, res: Response, next: Function): void {
   const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) {
+  // Try Authorization header first, then fall back to HttpOnly cookie
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : (req as any).cookies?.bm_token;
+
+  if (!token) {
     res.status(401).json({ success: false, error: 'Authentication required' });
     return;
   }
 
-  const token = header.slice(7);
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
     (req as any).user = decoded;
@@ -197,6 +200,15 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
 
     logger.info('User registered', { userId, email, verificationEmailSent: emailSent });
     eventBus.userRegistered(userId, email, name);
+
+    // Set HttpOnly cookie for seamless auth
+    res.cookie('bm_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'none',
+      maxAge: 24 * 60 * 60 * 1000, // 24h
+      path: '/',
+    });
 
     res.status(201).json({
       success: true,
@@ -281,6 +293,15 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
 
     // Include mute status in response if applicable
     const muted = sanction?.status === 'muted' && sanction.muted_until && sanction.muted_until > Date.now();
+
+    // Set HttpOnly cookie for seamless auth
+    res.cookie('bm_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'none',
+      maxAge: 24 * 60 * 60 * 1000, // 24h
+      path: '/',
+    });
 
     res.json({
       success: true,
@@ -389,6 +410,16 @@ router.post('/refresh', requireAuth, (req: Request, res: Response) => {
   }
 
   const token = signToken(user.id, user.email, user.tier, user.role);
+
+  // Set HttpOnly cookie with new token
+  res.cookie('bm_token', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'none',
+    maxAge: 24 * 60 * 60 * 1000, // 24h
+    path: '/',
+  });
+
   res.json({ success: true, data: { token } });
 });
 
@@ -683,6 +714,23 @@ router.post('/admin/create', async (req: Request, res: Response) => {
     logger.error('Admin creation error', { error: err.message });
     res.status(500).json({ success: false, error: 'Admin creation failed' });
   }
+});
+
+// ─── POST /logout ────────────────────────────────────────────────────────────
+// Clear the HttpOnly authentication cookie.
+
+router.post('/logout', (req: Request, res: Response) => {
+  res.clearCookie('bm_token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'none',
+    path: '/',
+  });
+
+  res.json({
+    success: true,
+    data: { message: 'Logged out successfully' },
+  });
 });
 
 export default router;

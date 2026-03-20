@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import { getDb, seedProhibitedItems, seedApiTiers } from './db/database';
 import { requestLogger, logger } from './middleware/logger';
@@ -27,6 +28,7 @@ import analyticsRouter from './routes/analytics';
 import adminRouter from './routes/admin';
 import adminMailRouter from './routes/adminMail';
 import verificationRouter from './routes/verification';
+import publicVerifyRouter from './routes/publicVerify';
 import imagesRouter from './routes/images';
 import notificationsRouter from './routes/notifications';
 import growthRouter from './routes/growth';
@@ -181,11 +183,15 @@ app.use(cors({
     }
     callback(null, false);
   },
+  credentials: true,
   exposedHeaders: ['X-Request-Id', 'RateLimit-Limit', 'RateLimit-Remaining', 'RateLimit-Reset'],
 }));
 
 // Raw body for Stripe webhook verification (must come before json parser)
 app.use('/v1/payments/webhook', express.raw({ type: 'application/json' }));
+
+// Cookie parser for HttpOnly cookie auth
+app.use(cookieParser());
 
 // 2 MB body limit — enough for a rich audit payload, too small for abuse
 app.use(express.json({ limit: '2mb' }));
@@ -213,6 +219,7 @@ app.use('/v1/analytics', analyticsRouter);
 app.use('/v1/admin',     adminRouter);
 app.use('/v1/admin/mail', adminMailRouter);
 app.use('/v1/verification', verificationRouter);
+app.use('/v1/verify', publicVerifyRouter);
 app.use('/v1/notifications', notificationsRouter);
 app.use('/v1/growth', growthRouter);
 app.use('/v1/migration', migrationRouter);
