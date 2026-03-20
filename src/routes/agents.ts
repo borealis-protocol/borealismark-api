@@ -936,7 +936,7 @@ router.get('/public', (req, res) => {
 
 // ─── PATCH /v1/agents/admin/public-listing ───────────────────────────────────
 // Admin endpoint: set public_listing on any agent (requires master API key)
-router.patch('/admin/public-listing', requireApiKey, requireScope('admin'), (req: AuthenticatedRequest, res) => {
+router.patch('/admin/public-listing', requireApiKey, requireScope('admin'), (req, res) => {
   try {
     const { agentId, public_listing } = req.body;
     if (!agentId || typeof public_listing !== 'boolean') {
