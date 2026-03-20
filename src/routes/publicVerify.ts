@@ -78,6 +78,7 @@ function generateVerifiedBadge(tier: string, bmScore: number): string {
   const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="background-color: transparent;">
+  <!-- DISCLAIMER: This badge represents an independent algorithmic assessment by Borealis Protocol. It does not constitute regulatory certification, EU AI Act conformity assessment, or any government-recognized endorsement. See https://borealisprotocol.ai/terms for full terms. -->
   <!-- Left section (Borealis Certified) -->
   <rect x="0" y="0" width="${leftWidth}" height="${height}" rx="${radius}" fill="#001f3f" stroke="#e5e7eb" stroke-width="1"/>
 
@@ -148,6 +149,7 @@ router.get('/:agentId', (req: Request, res: Response) => {
         imageUrl: `${apiBaseUrl}/v1/verify/${agentId}/badge.svg`,
         embedSnippet: `<script src="${apiBaseUrl}/v1/verify/${agentId}/badge.js"><\/script>`,
       },
+      disclaimer: 'This is an independent algorithmic assessment. It does not constitute regulatory certification, EU AI Act conformity assessment, or any government-recognized endorsement. See https://borealisprotocol.ai/terms for full terms.',
     };
 
     res.json(response);
