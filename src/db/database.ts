@@ -2707,6 +2707,14 @@ export function toggleAgentPublicListing(agentId: string, userId: string, public
   return result.changes > 0;
 }
 
+/** Admin-level: set public_listing without owner check (requires master key auth) */
+export function adminSetPublicListing(agentId: string, publicListing: boolean): boolean {
+  const result = getDb()
+    .prepare('UPDATE agents SET public_listing = ? WHERE id = ?')
+    .run(publicListing ? 1 : 0, agentId);
+  return result.changes > 0;
+}
+
 export function getPublicAgents(limit: number = 50, offset: number = 0): Record<string, unknown>[] {
   return getDb()
     .prepare(

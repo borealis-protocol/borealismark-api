@@ -128,12 +128,12 @@ router.get('/:agentId', (req: Request, res: Response) => {
       return res.status(404).json({ verified: false, error: 'Agent not certified' });
     }
 
-    // Parse score from certificate
-    const bmScore = (cert.score_total as number) || 0;
+    // Parse score from certificate (raw is 0-1000, normalize to 0-100 for BM Score)
+    const rawScore = (cert.score_total as number) || 0;
+    const bmScore = Math.round((rawScore / 10) * 10) / 10; // One decimal place
     const tier = getTierFromScore(bmScore);
 
-    const baseUrl = process.env.FRONTEND_URL || 'https://borealismark-api.onrender.com';
-    const apiBaseUrl = baseUrl.replace('https://borealismark.com', 'https://borealismark-api.onrender.com').replace('https://www.borealismark.com', 'https://borealismark-api.onrender.com');
+    const apiBaseUrl = process.env.API_BASE_URL || 'https://borealismark-api.onrender.com';
 
     const response = {
       verified: true,
@@ -178,8 +178,9 @@ router.get('/:agentId/badge.svg', (req: Request, res: Response) => {
       return res.header('Content-Type', 'image/svg+xml').send(generateUnverifiedBadge());
     }
 
-    // Generate verified badge with tier
-    const bmScore = (cert.score_total as number) || 0;
+    // Generate verified badge with tier (normalize 0-1000 → 0-100)
+    const rawScore = (cert.score_total as number) || 0;
+    const bmScore = Math.round((rawScore / 10) * 10) / 10;
     const tier = getTierFromScore(bmScore);
     const svg = generateVerifiedBadge(tier, bmScore);
 
@@ -201,8 +202,7 @@ router.get('/:agentId/badge.svg', (req: Request, res: Response) => {
 router.get('/:agentId/badge.js', (req: Request, res: Response) => {
   try {
     const { agentId } = req.params;
-    const baseUrl = process.env.FRONTEND_URL || 'https://borealismark-api.onrender.com';
-    const apiBaseUrl = baseUrl.replace('https://borealismark.com', 'https://borealismark-api.onrender.com').replace('https://www.borealismark.com', 'https://borealismark-api.onrender.com');
+    const apiBaseUrl = process.env.API_BASE_URL || 'https://borealismark-api.onrender.com';
 
     // Generate JavaScript embed snippet
     const script = `(function() {

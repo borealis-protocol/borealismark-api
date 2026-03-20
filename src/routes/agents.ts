@@ -21,6 +21,7 @@ import {
   getCertificatesByAgentId,
   getCertificatesByUserId,
   toggleAgentPublicListing,
+  adminSetPublicListing,
   getPublicAgents,
   createAuditRequest,
   getAuditRequest,
@@ -930,6 +931,28 @@ router.get('/public', (req, res) => {
   } catch (err) {
     logger.error('Get public agents error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Failed to get public agents', timestamp: Date.now() });
+  }
+});
+
+// ─── PATCH /v1/agents/admin/public-listing ───────────────────────────────────
+// Admin endpoint: set public_listing on any agent (requires master API key)
+router.patch('/admin/public-listing', requireApiKey, requireScope('admin'), (req: AuthenticatedRequest, res) => {
+  try {
+    const { agentId, public_listing } = req.body;
+    if (!agentId || typeof public_listing !== 'boolean') {
+      res.status(400).json({ success: false, error: 'agentId (string) and public_listing (boolean) required', timestamp: Date.now() });
+      return;
+    }
+    const updated = adminSetPublicListing(agentId, public_listing);
+    if (!updated) {
+      res.status(404).json({ success: false, error: 'Agent not found', timestamp: Date.now() });
+      return;
+    }
+    logger.info('Admin set public_listing', { agentId, public_listing });
+    res.json({ success: true, agentId, public_listing, timestamp: Date.now() });
+  } catch (err) {
+    logger.error('Admin public-listing error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Failed to update public listing', timestamp: Date.now() });
   }
 });
 
