@@ -1435,6 +1435,40 @@ function initSchema(db: Database.Database): void {
     logger.info(`[Migration Officer] ${importedActiveCount.cnt} imported listings exist. Startup auto-sync DISABLED (use API endpoint for manual sync).`);
   }
 
+  // Migrate: backfill bm_score for bots that still have the default 0
+  // Derives a realistic score from the bot's tier and ap_points
+  {
+    const botsWithZeroScore = db.prepare(
+      "SELECT id, tier, ap_points FROM bots WHERE bm_score = 0 OR bm_score IS NULL"
+    ).all() as Array<{ id: string; tier: string; ap_points: number }>;
+
+    if (botsWithZeroScore.length > 0) {
+      const updateStmt = db.prepare("UPDATE bots SET bm_score = ?, updated_at = ? WHERE id = ?");
+      const now = Date.now();
+
+      for (const bot of botsWithZeroScore) {
+        // Base score from tier
+        let score: number;
+        switch ((bot.tier || 'bronze').toLowerCase()) {
+          case 'platinum': score = 92; break;
+          case 'gold':     score = 82; break;
+          case 'silver':   score = 72; break;
+          case 'bronze':   score = 58; break;
+          default:         score = 45; break;
+        }
+        // Adjust slightly based on AP points (±5 range)
+        if (bot.ap_points > 0) {
+          score += Math.min(5, Math.floor(bot.ap_points / 200));
+        }
+        // Clamp to valid range
+        score = Math.max(1, Math.min(100, score));
+
+        updateStmt.run(score, now, bot.id);
+      }
+      logger.info(`[Migration] Backfilled bm_score for ${botsWithZeroScore.length} bots`);
+    }
+  }
+
   // Ensure the master API key exists with full admin scopes
   const masterKey = process.env.API_MASTER_KEY;
   if (!masterKey) {
