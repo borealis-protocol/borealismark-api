@@ -36,6 +36,7 @@ import {
 } from '../hedera/usdc';
 import { logger } from '../middleware/logger';
 import {
+  getDb,
   getUserByEmail,
   getUserById,
   updateUserTier,
