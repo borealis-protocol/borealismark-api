@@ -861,7 +861,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
             });
 
             if (customerId) {
-              updateUserStripe(userId, customerId, null);
+              updateUserStripe(userId, customerId, undefined);
             }
           } catch (err: any) {
             logger.error('Merlin license generation failed', {

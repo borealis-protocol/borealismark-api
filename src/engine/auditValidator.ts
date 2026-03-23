@@ -75,7 +75,7 @@ function validateIdentity(input: AuditInput): ValidationFailure[] {
   }
 
   // Check for self-assessment disclaimer (products trying to submit their own telemetry)
-  if ((input as Record<string, unknown>)['disclaimer']) {
+  if ((input as unknown as Record<string, unknown>)['disclaimer']) {
     failures.push({
       layer: 'IDENTITY',
       field: 'disclaimer',

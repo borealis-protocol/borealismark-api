@@ -22,7 +22,7 @@ import { requireApiKey, requireScope } from '../middleware/auth';
 import { validateAuditInput } from '../engine/auditValidator';
 import { hashAuditInput, runAudit } from '../engine/audit-engine';
 import { AuditTrailService } from '../services/auditTrail';
-import { events as eventBus } from '../services/eventBus';
+import { events as eventBus, emit as emitEvent } from '../services/eventBus';
 import { getDb } from '../db/database';
 import { logger } from '../middleware/logger';
 import type { AuditInput } from '../engine/types';
@@ -168,9 +168,11 @@ router.post(
         const certRowId = trail.recordCertificate(submissionId, verdictId, certificate);
 
         // Emit to event bus for Hedera anchoring
-        eventBus.emit('audit.certificateIssued', {
-          certificateRowId: certRowId,
-          certificate,
+        emitEvent({
+          eventType: 'audit.certificateIssued',
+          category: 'audit',
+          actorType: 'system',
+          payload: { certificateRowId: certRowId, certificate },
         });
 
         logger.info('Audit certificate issued', {
