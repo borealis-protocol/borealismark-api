@@ -95,6 +95,57 @@ function hashKey(rawKey: string): string {
   return crypto.createHash('sha256').update(rawKey).digest('hex');
 }
 
+/**
+ * Generate a BTS license key for a user and persist it to the database.
+ * Called internally by the Stripe webhook handler on purchase completion.
+ * Returns the raw key (shown ONCE — caller is responsible for delivering it).
+ */
+export function generateLicenseInternal(params: {
+  userId: string;
+  orderId?: string;
+  purchasePrice?: number;
+  purchaseCurrency?: string;
+  paymentMethod?: 'stripe' | 'usdc';
+}): { licenseId: string; rawKey: string; keyPrefix: string } {
+  const db = getDb();
+  const user = db.prepare('SELECT id FROM users WHERE id = ?').get(params.userId) as any;
+  if (!user) {
+    throw new Error(`User not found: ${params.userId}`);
+  }
+
+  const { rawKey, keyHash, keyPrefix } = generateBTSKey();
+  const licenseId = uuid();
+  const now = Date.now();
+
+  db.prepare(`
+    INSERT INTO merlin_licenses (
+      id, key_hash, key_prefix, user_id, status, order_id,
+      purchase_price, purchase_currency, payment_method, created_at
+    ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
+  `).run(
+    licenseId,
+    keyHash,
+    keyPrefix,
+    params.userId,
+    params.orderId ?? null,
+    params.purchasePrice ?? 129.99,
+    params.purchaseCurrency ?? 'USD',
+    params.paymentMethod ?? 'stripe',
+    now,
+  );
+
+  logLicenseEvent(licenseId, 'license.generated', {
+    userId: params.userId,
+    orderId: params.orderId,
+    purchasePrice: params.purchasePrice,
+    paymentMethod: params.paymentMethod,
+    keyPrefix,
+    source: 'stripe-webhook',
+  }, 'stripe-webhook');
+
+  return { licenseId, rawKey, keyPrefix };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function logLicenseEvent(

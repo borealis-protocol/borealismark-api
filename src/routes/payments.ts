@@ -8,6 +8,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import {
   createCheckoutSession,
+  createOneTimeCheckoutSession,
   getCustomerSubscriptions,
   createBillingPortalSession,
   constructWebhookEvent,
@@ -16,7 +17,10 @@ import {
   ALL_PLANS, AGENT_PLANS, API_TIERS,
   getPlanByPriceId, USDC_PRICES,
   getUsdcPriceWithDiscount, USDC_DISCOUNT_PERCENT,
+  MERLIN_PRODUCT,
 } from '../stripe/config';
+import { generateLicenseInternal } from './licenses';
+import { sendBTSKeyEmail } from '../services/email';
 import {
   createUsdcInvoice,
   getInvoice,
@@ -171,9 +175,10 @@ router.get('/plans', (_req: Request, res: Response) => {
 // Unified checkout — routes to Stripe or USDC based on `method` field
 
 const checkoutSchema = z.object({
-  planId: z.string().refine(id => id in ALL_PLANS, { message: 'Invalid plan ID' }),
+  planId: z.string().refine(id => id === 'merlin' || id in ALL_PLANS, { message: 'Invalid plan ID' }),
   method: z.enum(['stripe', 'usdc']),
   email: z.string().email(),
+  userId: z.string().optional(), // required for merlin one-time purchase
   agentId: z.string().optional(),
   couponCode: z.string().optional(),
   isRenewal: z.boolean().optional().default(false),
@@ -185,6 +190,60 @@ const checkoutSchema = z.object({
 router.post('/checkout', async (req: Request, res: Response) => {
   try {
     const body = checkoutSchema.parse(req.body);
+
+    // ── Merlin One-Time Purchase (Stripe only) ──
+    if (body.planId === 'merlin') {
+      if (body.method !== 'stripe') {
+        return res.status(400).json({
+          success: false,
+          error: 'Merlin BTS License Key purchases require Stripe. USDC not yet supported for one-time purchases.',
+          timestamp: Date.now(),
+        });
+      }
+      if (!body.userId) {
+        return res.status(400).json({
+          success: false,
+          error: 'userId is required for Merlin purchases',
+          timestamp: Date.now(),
+        });
+      }
+      if (!MERLIN_PRODUCT.priceId) {
+        return res.status(503).json({
+          success: false,
+          error: 'Merlin Stripe product not yet configured (STRIPE_MERLIN_PRICE_ID missing)',
+          timestamp: Date.now(),
+        });
+      }
+
+      const session = await createOneTimeCheckoutSession({
+        priceId: MERLIN_PRODUCT.priceId,
+        customerEmail: body.email,
+        userId: body.userId,
+        successUrl: body.successUrl ?? `${process.env.FRONTEND_URL ?? 'https://borealisterminal.com'}/dashboard.html?payment=success&product=merlin`,
+        cancelUrl: body.cancelUrl ?? `${process.env.FRONTEND_URL ?? 'https://borealisterminal.com'}#merlin`,
+      });
+
+      logger.info('Merlin checkout created', {
+        sessionId: session.id,
+        email: body.email,
+        userId: body.userId,
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          method: 'stripe',
+          product: 'merlin',
+          sessionId: session.id,
+          url: session.url,
+          amount: MERLIN_PRODUCT.amount / 100,
+          currency: MERLIN_PRODUCT.currency,
+        },
+        timestamp: Date.now(),
+      });
+    }
+
+    // Subscription plans only below this point
     const plan = ALL_PLANS[body.planId];
 
     // ── Validate coupon if provided ──
@@ -203,7 +262,7 @@ router.post('/checkout', async (req: Request, res: Response) => {
       couponDiscount = couponRecord!.discountPercent;
     }
 
-    // ── Stripe Card Checkout ──
+    // ── Stripe Card Checkout (subscriptions) ──
     if (body.method === 'stripe') {
       // For Stripe, coupons would need to be created as Stripe Coupon objects
       // For now, we apply coupons only to USDC payments
@@ -756,15 +815,65 @@ router.post('/webhook', async (req: Request, res: Response) => {
         const customerEmail = session.customer_email as string | undefined;
         const customerId = session.customer as string | undefined;
         const priceId = session.line_items?.data?.[0]?.price?.id;
+        const metadata = session.metadata ?? {};
 
         logger.info('Checkout completed', {
           sessionId: session.id,
+          mode: session.mode,
           customerId,
           email: customerEmail,
-          agentId: session.metadata?.agentId,
+          product: metadata.product,
         });
 
-        // Link Stripe customer to user and upgrade tier
+        // ── Merlin One-Time Purchase ──
+        if (session.mode === 'payment' && metadata.product === 'merlin') {
+          const userId = metadata.userId as string | undefined;
+          if (!userId || !customerEmail) {
+            logger.error('Merlin webhook: missing userId or email in session metadata', {
+              sessionId: session.id, userId, customerEmail,
+            });
+            break;
+          }
+
+          try {
+            const { licenseId, rawKey, keyPrefix } = generateLicenseInternal({
+              userId,
+              orderId: session.id,
+              purchasePrice: 129.99,
+              purchaseCurrency: 'USD',
+              paymentMethod: 'stripe',
+            });
+
+            // Deliver the key via email — the ONLY time the raw key is transmitted
+            const user = getUserById(userId);
+            const delivered = await sendBTSKeyEmail(
+              customerEmail,
+              user?.name ?? 'there',
+              rawKey,
+              keyPrefix,
+            );
+
+            logger.info('Merlin license generated and emailed', {
+              licenseId,
+              keyPrefix,
+              userId,
+              emailDelivered: delivered,
+            });
+
+            if (customerId) {
+              updateUserStripe(userId, customerId, null);
+            }
+          } catch (err: any) {
+            logger.error('Merlin license generation failed', {
+              sessionId: session.id,
+              userId,
+              error: err.message,
+            });
+          }
+          break;
+        }
+
+        // ── Subscription Checkout ──
         if (customerEmail && customerId) {
           const user = getUserByEmail(customerEmail);
           if (user) {
@@ -774,8 +883,6 @@ router.post('/webhook', async (req: Request, res: Response) => {
             const targetTier = plan ? (planToTier[plan.tier] ?? 'pro') : 'pro';
             updateUserTier(user.id, targetTier);
 
-            // Set subscription expiry from Stripe's period end
-            const sub = session.subscription;
             // Default to 1 year from now for annual plans
             const expiresAt = calculateExpiryFromNow(plan?.tier ?? 'pro');
             setSubscriptionExpiry(user.id, expiresAt, 'stripe', plan?.tier ?? 'pro');
@@ -839,6 +946,65 @@ router.post('/webhook', async (req: Request, res: Response) => {
             });
             eventBus.subscriptionExpired(user.id, user.tier);
           }
+        }
+        break;
+      }
+
+      case 'charge.refunded': {
+        // Auto-revoke Merlin license when a Stripe refund is issued.
+        // KAEL's condition: a refunded purchase must not leave an active key.
+        const charge = event.data.object as any;
+        const refundedSessionId = charge.payment_intent
+          ? charge.metadata?.checkout_session_id ?? null
+          : null;
+
+        logger.info('Charge refunded', {
+          chargeId: charge.id,
+          paymentIntent: charge.payment_intent,
+          amount: charge.amount_refunded,
+        });
+
+        // Look up and revoke any Merlin license issued for this charge's payment intent
+        try {
+          const { getDb } = await import('../db/database');
+          const db = getDb();
+          const license = db.prepare(
+            `SELECT id, user_id, status FROM merlin_licenses WHERE order_id = ? AND status NOT IN ('revoked', 'terminated')`
+          ).get(charge.payment_intent) as any;
+
+          if (!license) {
+            // Try matching by Stripe checkout session ID in order_id
+            const licenseBySession = refundedSessionId
+              ? db.prepare(
+                  `SELECT id, user_id, status FROM merlin_licenses WHERE order_id = ? AND status NOT IN ('revoked', 'terminated')`
+                ).get(refundedSessionId) as any
+              : null;
+
+            if (licenseBySession) {
+              db.prepare(
+                `UPDATE merlin_licenses SET status = 'revoked', status_reason = ?, revoked_at = ? WHERE id = ?`
+              ).run('Stripe refund issued', Date.now(), licenseBySession.id);
+
+              logger.warn('Merlin license revoked due to Stripe refund', {
+                licenseId: licenseBySession.id,
+                userId: licenseBySession.user_id,
+                chargeId: charge.id,
+              });
+            }
+            break;
+          }
+
+          db.prepare(
+            `UPDATE merlin_licenses SET status = 'revoked', status_reason = ?, revoked_at = ? WHERE id = ?`
+          ).run('Stripe refund issued', Date.now(), license.id);
+
+          logger.warn('Merlin license revoked due to Stripe refund', {
+            licenseId: license.id,
+            userId: license.user_id,
+            chargeId: charge.id,
+          });
+        } catch (err: any) {
+          logger.error('Failed to revoke license on refund', { chargeId: charge.id, error: err.message });
         }
         break;
       }

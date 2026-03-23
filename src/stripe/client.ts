@@ -60,6 +60,44 @@ export async function createCheckoutSession(params: CreateCheckoutParams): Promi
   return stripe.checkout.sessions.create(sessionParams);
 }
 
+// ─── One-Time Payment Session (Merlin BTS License Key) ───────────────────────
+
+export interface CreateOneTimeCheckoutParams {
+  priceId: string;
+  customerId?: string;
+  customerEmail?: string;
+  userId: string;          // passed as metadata for webhook lookup
+  successUrl: string;
+  cancelUrl: string;
+}
+
+export async function createOneTimeCheckoutSession(
+  params: CreateOneTimeCheckoutParams,
+): Promise<Stripe.Checkout.Session> {
+  const stripe = getStripe();
+
+  const sessionParams: Stripe.Checkout.SessionCreateParams = {
+    mode: 'payment',
+    payment_method_types: ['card'],
+    line_items: [{ price: params.priceId, quantity: 1 }],
+    success_url: params.successUrl,
+    cancel_url: params.cancelUrl,
+    metadata: {
+      product: 'merlin',
+      userId: params.userId,
+      source: 'borealismark',
+    },
+  };
+
+  if (params.customerId) {
+    sessionParams.customer = params.customerId;
+  } else if (params.customerEmail) {
+    sessionParams.customer_email = params.customerEmail;
+  }
+
+  return stripe.checkout.sessions.create(sessionParams);
+}
+
 // ─── Customer Helpers ────────────────────────────────────────────────────────
 
 export async function createCustomer(email: string, name?: string): Promise<Stripe.Customer> {

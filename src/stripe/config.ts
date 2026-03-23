@@ -118,6 +118,26 @@ export const API_TIERS: Record<string, StripePlan> = {
   },
 };
 
+// ─── Merlin BTS License Key (One-Time Purchase) ──────────────────────────────
+
+export interface MerlinProduct {
+  name: string;
+  productId: string;
+  priceId: string;
+  amount: number;   // cents
+  currency: 'usd';
+  description: string;
+}
+
+export const MERLIN_PRODUCT: MerlinProduct = {
+  name: 'Merlin BTS License Key',
+  productId: process.env.STRIPE_MERLIN_PRODUCT_ID ?? '',
+  priceId: process.env.STRIPE_MERLIN_PRICE_ID ?? '',
+  amount: 12999, // $129.99
+  currency: 'usd',
+  description: 'One-time purchase. Permanent BTS License Key for AI agent trust scoring.',
+};
+
 // ─── Lookup Helpers ──────────────────────────────────────────────────────────
 
 export const ALL_PLANS = { ...AGENT_PLANS, ...API_TIERS };

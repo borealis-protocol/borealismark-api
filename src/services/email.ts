@@ -1233,3 +1233,148 @@ export async function sendVerificationNotificationEmail(
     return false;
   }
 }
+
+/**
+ * Send a BTS License Key delivery email.
+ * This is the ONLY time the raw key is ever transmitted.
+ * The key hash is stored; the plaintext key is never logged or stored after this point.
+ */
+export async function sendBTSKeyEmail(
+  toEmail: string,
+  userName: string,
+  btsKey: string,
+  keyPrefix: string,
+): Promise<boolean> {
+  const dashboardUrl = `${process.env.FRONTEND_URL ?? 'https://borealismark.com'}/dashboard.html`;
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: #0C0D10; color: #E0E0E0; }
+    .container { max-width: 580px; margin: 40px auto; padding: 0 20px; }
+    .card { background: #16171C; border: 1px solid #2A2B33; border-radius: 12px; padding: 40px 32px; }
+    .logo { color: #D4A853; font-size: 20px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 24px; }
+    h1 { font-size: 22px; font-weight: 600; color: #FFFFFF; margin: 0 0 8px 0; }
+    .subtitle { font-size: 14px; color: #888; margin: 0 0 24px 0; }
+    p { font-size: 15px; line-height: 1.6; color: #A0A0A0; margin: 0 0 16px 0; }
+    .key-block { background: #0C0D10; border: 2px solid #D4A853; border-radius: 10px; padding: 24px; margin: 24px 0; text-align: center; }
+    .key-label { font-size: 11px; font-weight: 700; color: #888; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 12px; }
+    .key-value { font-family: 'Courier New', Courier, monospace; font-size: 22px; font-weight: 700; color: #D4A853; letter-spacing: 3px; word-break: break-all; }
+    .warning-box { background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; padding: 16px 20px; margin: 20px 0; }
+    .warning-title { font-size: 13px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .warning-text { font-size: 13px; color: #fca5a5; line-height: 1.6; margin: 0; }
+    .steps { background: #1A1B22; border-radius: 8px; padding: 20px 24px; margin: 20px 0; }
+    .steps-title { font-size: 13px; font-weight: 700; color: #D4A853; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+    .step { display: flex; align-items: flex-start; margin-bottom: 12px; font-size: 13px; color: #A0A0A0; line-height: 1.5; }
+    .step-num { background: #D4A853; color: #0C0D10; font-weight: 700; font-size: 11px; border-radius: 50%; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-right: 10px; margin-top: 1px; }
+    code { background: #0C0D10; padding: 1px 6px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; color: #D4A853; }
+    .btn { display: inline-block; background: #D4A853; color: #0C0D10; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 15px; margin: 8px 0 4px 0; }
+    .divider { border-top: 1px solid #2A2B33; margin: 24px 0; }
+    .small { font-size: 12px; color: #555; line-height: 1.6; }
+    .footer { text-align: center; padding: 24px 0; font-size: 12px; color: #444; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="logo">BorealisMark</div>
+      <h1>Your BTS License Key</h1>
+      <p class="subtitle">Merlin AI Trust Scoring — Order Confirmation</p>
+
+      <p>Hi ${userName || 'there'},</p>
+      <p>Your purchase is confirmed. Below is your BTS License Key. This key is shown <strong style="color:#fff">exactly once</strong> — save it now.</p>
+
+      <div class="key-block">
+        <div class="key-label">BTS License Key &mdash; ${keyPrefix}...</div>
+        <div class="key-value">${btsKey}</div>
+      </div>
+
+      <div class="warning-box">
+        <div class="warning-title">⚠ Permanent Binding Warning</div>
+        <p class="warning-text">
+          When you activate this key, it binds <strong>permanently</strong> to one AI agent. This binding cannot be reversed or transferred.
+          If you later need a new key, <strong>both this key and its bound agent will be permanently terminated</strong> — all trust scores for that agent will be marked as terminated on the public record.
+          <strong>Choose your agent carefully before activating.</strong>
+        </p>
+      </div>
+
+      <div class="steps">
+        <div class="steps-title">Activation Steps</div>
+        <div class="step"><span class="step-num">1</span>Log in to your BorealisMark dashboard and navigate to <strong style="color:#fff">My Licenses</strong>.</div>
+        <div class="step"><span class="step-num">2</span>Click <strong style="color:#fff">Activate Key</strong> and enter your key or use the API endpoint <code>POST /v1/licenses/activate</code>.</div>
+        <div class="step"><span class="step-num">3</span>Select an existing agent or register a new one — this binds the key permanently.</div>
+        <div class="step"><span class="step-num">4</span>Integrate via the <code>@borealis/merlin-sdk</code> (coming soon) or call <code>/v1/licenses/verify</code> directly to submit telemetry and generate BTS scores.</div>
+      </div>
+
+      <a href="${dashboardUrl}" class="btn">Go to Dashboard</a>
+
+      <div class="divider"></div>
+      <p class="small">Save this email. Your raw BTS key will <strong>never be shown again</strong> — only the key prefix (<code>${keyPrefix}...</code>) is visible in your dashboard for identification. If you lose this key before activating it, contact support to have it replaced (the old key will be permanently terminated).</p>
+    </div>
+    <div class="footer">
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification<br>
+      <span style="color:#333">This email was sent to ${toEmail} because you purchased a Merlin BTS License Key.</span>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Your BTS License Key — BorealisMark
+
+Hi ${userName || 'there'},
+
+Your Merlin BTS License Key purchase is confirmed.
+
+YOUR KEY (save this — shown ONCE):
+${btsKey}
+
+⚠ PERMANENT BINDING WARNING:
+When you activate this key, it binds permanently to one AI agent. This cannot be reversed.
+If you need a new key later, both this key AND its bound agent will be permanently terminated.
+Choose your agent carefully before activating.
+
+ACTIVATION STEPS:
+1. Log in to your dashboard at ${dashboardUrl}
+2. Go to "My Licenses" and activate your key (or use POST /v1/licenses/activate)
+3. Select or register the agent you want to bind permanently
+4. Integrate via @borealis/merlin-sdk or call /v1/licenses/verify directly for trust scoring
+
+Save this email — your raw key will NEVER be shown again.
+Only the key prefix (${keyPrefix}...) is visible in your dashboard.
+
+— BorealisMark Protocol`;
+
+  if (!process.env.RESEND_API_KEY) {
+    logger.info('BTS key email (NOT SENT — no RESEND_API_KEY)', {
+      to: toEmail,
+      keyPrefix,
+      // Never log the raw key
+    });
+    return true;
+  }
+
+  try {
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [toEmail],
+      subject: `Your BTS License Key — ${keyPrefix}... (save this email)`,
+      html,
+      text,
+    });
+
+    if (result.error) {
+      logger.error('BTS key email send failed', { error: result.error, to: toEmail, keyPrefix });
+      return false;
+    }
+
+    logger.info('BTS key email sent', { to: toEmail, keyPrefix, id: result.data?.id });
+    return true;
+  } catch (err: any) {
+    logger.error('BTS key email error', { error: err.message, to: toEmail, keyPrefix });
+    return false;
+  }
+}
