@@ -36,7 +36,11 @@ function initSchema(db: Database.Database): void {
       version TEXT NOT NULL DEFAULT '1.0.0',
       registered_at INTEGER NOT NULL,
       registrant_key_id TEXT NOT NULL,
-      active INTEGER NOT NULL DEFAULT 1
+      active INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'active',
+      terminated_at INTEGER,
+      termination_reason TEXT,
+      terminated_by TEXT
     );
 
     CREATE TABLE IF NOT EXISTS audit_certificates (
@@ -614,9 +618,16 @@ function initSchema(db: Database.Database): void {
   if (!agentCols.includes('agent_type'))      db.exec("ALTER TABLE agents ADD COLUMN agent_type TEXT DEFAULT 'other'");
   if (!agentCols.includes('public_listing'))  db.exec("ALTER TABLE agents ADD COLUMN public_listing INTEGER DEFAULT 0");
 
+  // Migrate: add agent termination tracking (BTS License Key lifecycle)
+  if (!agentCols.includes('status'))              db.exec("ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+  if (!agentCols.includes('terminated_at'))       db.exec("ALTER TABLE agents ADD COLUMN terminated_at INTEGER");
+  if (!agentCols.includes('termination_reason'))  db.exec("ALTER TABLE agents ADD COLUMN termination_reason TEXT");
+  if (!agentCols.includes('terminated_by'))       db.exec("ALTER TABLE agents ADD COLUMN terminated_by TEXT");
+
   // Index for dashboard agent lookups by user
   try { db.exec("CREATE INDEX IF NOT EXISTS idx_agents_owner ON agents(owner_user_id)"); } catch {}
   try { db.exec("CREATE INDEX IF NOT EXISTS idx_agents_public ON agents(public_listing) WHERE active = 1 AND public_listing = 1"); } catch {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status)"); } catch {}
 
   // Migrate: add new columns to api_keys if upgrading from old schema
   const keyColumns = (db.prepare("PRAGMA table_info(api_keys)").all() as Array<{ name: string }>).map(r => r.name);
@@ -1775,6 +1786,81 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_debates_featured ON debates(featured, published_at DESC);
     CREATE INDEX IF NOT EXISTS idx_debates_status ON debates(status);
     CREATE INDEX IF NOT EXISTS idx_debates_created ON debates(created_at DESC);
+
+    -- ══════════════════════════════════════════════════════════════════════════════
+    -- MERLIN LICENSE KEY INFRASTRUCTURE
+    -- Core licensing engine for Project Merlin. Each purchase generates a unique
+    -- BTS License Key that connects an AI agent to the Borealis Trust Network.
+    -- The key is the product — without it, the runtime cannot score or anchor.
+    -- ══════════════════════════════════════════════════════════════════════════════
+
+    CREATE TABLE IF NOT EXISTS merlin_licenses (
+      id                TEXT PRIMARY KEY,
+      key_hash          TEXT NOT NULL UNIQUE,
+      key_prefix        TEXT NOT NULL,
+      user_id           TEXT NOT NULL,
+      agent_id          TEXT,
+      status            TEXT NOT NULL DEFAULT 'active',
+      status_reason     TEXT,
+
+      order_id          TEXT,
+      purchase_price    REAL NOT NULL,
+      purchase_currency TEXT NOT NULL DEFAULT 'USD',
+      payment_method    TEXT,
+
+      created_at        INTEGER NOT NULL,
+      activated_at      INTEGER,
+      last_verified_at  INTEGER,
+      last_audit_at     INTEGER,
+      suspended_at      INTEGER,
+      revoked_at        INTEGER,
+
+      activation_ip     TEXT,
+      last_seen_ip      TEXT,
+      verify_count      INTEGER NOT NULL DEFAULT 0,
+
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (agent_id) REFERENCES agents(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_licenses_user ON merlin_licenses(user_id);
+    CREATE INDEX IF NOT EXISTS idx_licenses_agent ON merlin_licenses(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_licenses_status ON merlin_licenses(status);
+    CREATE INDEX IF NOT EXISTS idx_licenses_keyhash ON merlin_licenses(key_hash);
+
+    CREATE TABLE IF NOT EXISTS license_audit_log (
+      id            TEXT PRIMARY KEY,
+      license_id    TEXT NOT NULL,
+      event_type    TEXT NOT NULL,
+      event_data    TEXT,
+      actor         TEXT,
+      ip_address    TEXT,
+      created_at    INTEGER NOT NULL,
+      FOREIGN KEY (license_id) REFERENCES merlin_licenses(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_lal_license ON license_audit_log(license_id);
+    CREATE INDEX IF NOT EXISTS idx_lal_type ON license_audit_log(event_type);
+    CREATE INDEX IF NOT EXISTS idx_lal_time ON license_audit_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS license_score_history (
+      id                      TEXT PRIMARY KEY,
+      license_id              TEXT NOT NULL,
+      agent_id                TEXT NOT NULL,
+      score_total             INTEGER NOT NULL,
+      score_display           INTEGER NOT NULL,
+      credit_rating           TEXT NOT NULL,
+      score_breakdown         TEXT NOT NULL,
+      hcs_topic_id            TEXT,
+      hcs_transaction_id      TEXT,
+      hcs_sequence_number     INTEGER,
+      hcs_consensus_timestamp TEXT,
+      license_status_at_scoring TEXT NOT NULL,
+      computed_at             INTEGER NOT NULL,
+      FOREIGN KEY (license_id) REFERENCES merlin_licenses(id),
+      FOREIGN KEY (agent_id) REFERENCES agents(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_lsh_license ON license_score_history(license_id);
+    CREATE INDEX IF NOT EXISTS idx_lsh_agent ON license_score_history(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_lsh_time ON license_score_history(computed_at);
   `);
 
   // Migrate: add verdict columns to debates table

@@ -37,6 +37,8 @@ import progressionRouter from './routes/progression';
 import sparkRouter from './routes/spark';
 import debatesRouter from './routes/debates';
 import gameRouter from './routes/game';
+import auditRouter from './routes/audit';
+import licensesRouter from './routes/licenses';
 import { cleanupExpiredInvoices } from './hedera/usdc';
 import { validateHederaConfig, logHealthCheckResults } from './hedera/healthcheck';
 import { validateStripeConfig, getStripeMode } from './stripe/mode';
@@ -227,6 +229,8 @@ app.use('/v1/progression', progressionRouter);
 app.use('/v1/spark', sparkRouter);
 app.use('/v1/debates', debatesRouter);
 app.use('/v1/game', gameRouter);
+app.use('/v1/audit', auditRouter);
+app.use('/v1/licenses', licensesRouter);
 
 // ─── Static Files (Dashboard) ────────────────────────────────────────────────
 
