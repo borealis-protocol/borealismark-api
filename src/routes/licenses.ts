@@ -416,7 +416,19 @@ router.post('/activate', (req: Request, res: Response) => {
 
     // AGENT SLOT cap — users can hold unlimited keys, but can only BIND them
     // to as many agents as their tier allows. The cap is on agent slots, not keys.
-    const user = db.prepare('SELECT tier FROM users WHERE id = ?').get(license.user_id) as any;
+    const user = db.prepare('SELECT tier, email_verified FROM users WHERE id = ?').get(license.user_id) as any;
+
+    // Email must be verified before activating a license
+    if (!user?.email_verified) {
+      res.status(403).json({
+        success: false,
+        error: 'Email verification required. Please verify your email address before activating a license key.',
+        code: 'EMAIL_NOT_VERIFIED',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
     const userTier = user?.tier || 'standard';
     const maxAgentSlots = TIER_AGENT_LIMITS[userTier] ?? TIER_AGENT_LIMITS.standard;
 

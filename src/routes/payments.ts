@@ -12,7 +12,9 @@ import {
   getCustomerSubscriptions,
   createBillingPortalSession,
   constructWebhookEvent,
+  listCustomerInvoices,
 } from '../stripe/client';
+import { requireAuth, type AuthRequest } from './auth';
 import {
   ALL_PLANS, AGENT_PLANS, API_TIERS,
   getPlanByPriceId, USDC_PRICES,
@@ -663,6 +665,81 @@ router.get('/subscriptions/:customerId', async (req: Request, res: Response) => 
       error: 'Failed to fetch subscriptions',
       timestamp: Date.now(),
     });
+  }
+});
+
+// ─── GET /v1/payments/history ────────────────────────────────────────────────
+// Purchase history for the authenticated user. Returns Stripe invoices +
+// Merlin one-time license purchases from the local DB.
+
+router.get('/history', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthRequest;
+    const userId = authReq.user!.sub;
+    const db = getDb();
+
+    const user = getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found', timestamp: Date.now() });
+    }
+
+    // Fetch Stripe invoices if the user has a Stripe customer ID
+    let stripeHistory: any[] = [];
+    if (user.stripeCustomerId) {
+      try {
+        const invoices = await listCustomerInvoices(user.stripeCustomerId, 25);
+        stripeHistory = invoices
+          .filter(inv => inv.status !== 'void' && inv.total > 0)
+          .map(inv => ({
+            id: inv.id,
+            type: inv.subscription ? 'subscription' : 'one_time',
+            description: inv.lines?.data?.[0]?.description || inv.description || 'Borealis subscription',
+            amount: inv.total / 100,
+            currency: inv.currency?.toUpperCase() ?? 'USD',
+            status: inv.status,
+            date: inv.created * 1000,
+            receiptUrl: inv.hosted_invoice_url || null,
+            pdfUrl: inv.invoice_pdf || null,
+            method: 'stripe',
+          }));
+      } catch (stripeErr: any) {
+        logger.warn('Failed to fetch Stripe invoices for user', { userId, error: stripeErr.message });
+      }
+    }
+
+    // Fetch Merlin one-time license purchases from local DB
+    const merlinPurchases = db.prepare(`
+      SELECT id, created_at, purchase_price, purchase_currency, payment_method
+      FROM merlin_licenses
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+      LIMIT 25
+    `).all(userId) as any[];
+
+    const merlinHistory = merlinPurchases.map(ml => ({
+      id: 'ml_' + ml.id,
+      type: 'merlin_license',
+      description: 'BTS License Key (Merlin)',
+      amount: ml.purchase_price ?? 49,
+      currency: (ml.purchase_currency ?? 'USD').toUpperCase(),
+      status: 'paid',
+      date: ml.created_at,
+      receiptUrl: null,
+      pdfUrl: null,
+      method: ml.payment_method || 'stripe',
+    }));
+
+    // Merge and sort by date descending
+    const combined = [...stripeHistory, ...merlinHistory].sort((a, b) => b.date - a.date);
+
+    res.json({
+      success: true,
+      data: combined,
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    logger.error('Purchase history fetch failed', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch purchase history', timestamp: Date.now() });
   }
 });
 

@@ -115,6 +115,12 @@ export async function getCustomerSubscriptions(customerId: string): Promise<Stri
   return subs.data;
 }
 
+export async function listCustomerInvoices(customerId: string, limit = 25): Promise<Stripe.Invoice[]> {
+  const stripe = getStripe();
+  const invoices = await stripe.invoices.list({ customer: customerId, limit });
+  return invoices.data;
+}
+
 // ─── Subscription Portal ─────────────────────────────────────────────────────
 
 export async function createBillingPortalSession(customerId: string, returnUrl: string): Promise<Stripe.BillingPortal.Session> {
