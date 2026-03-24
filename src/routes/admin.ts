@@ -528,4 +528,84 @@ router.get('/r2-status', requireAuth, requireAdmin, (_req: Request, res: Respons
   });
 });
 
+// ── Database Backup ─────────────────────────────────────────────────────────
+// Downloads a live copy of the SQLite database.
+// Uses SQLite's backup API (via VACUUM INTO) for crash-safe snapshots.
+// Admin-only. KAEL mandate: "No deploy without a backup."
+router.get('/backup/db', requireAuth, requireAdmin, (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const backupDir = process.env.BACKUP_DIR ?? '/tmp';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(backupDir, `borealis-backup-${timestamp}.db`);
+
+    // VACUUM INTO creates an atomic snapshot — safe even under concurrent writes
+    db.exec(`VACUUM INTO '${backupPath}'`);
+
+    const stats = statSync(backupPath);
+    logger.info('Database backup created', {
+      path: backupPath,
+      sizeBytes: stats.size,
+      timestamp,
+      requestedBy: (req as any).user?.email,
+    });
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="borealis-backup-${timestamp}.db"`);
+    res.setHeader('Content-Length', stats.size.toString());
+
+    const { createReadStream } = require('fs');
+    const stream = createReadStream(backupPath);
+    stream.pipe(res);
+
+    // Clean up temp file after download
+    stream.on('end', () => {
+      try { require('fs').unlinkSync(backupPath); } catch {}
+    });
+  } catch (err: any) {
+    logger.error('Database backup failed', { error: err.message });
+    res.status(500).json({
+      success: false,
+      error: 'Backup failed: ' + err.message,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+// ── Database Stats (for monitoring) ─────────────────────────────────────────
+router.get('/backup/stats', requireAuth, requireAdmin, (_req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tables = db.prepare(`
+      SELECT name, (SELECT COUNT(*) FROM pragma_table_info(name)) as columns
+      FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'
+      ORDER BY name
+    `).all() as any[];
+
+    const counts: Record<string, number> = {};
+    for (const t of tables) {
+      try {
+        const row = db.prepare(`SELECT COUNT(*) as count FROM "${t.name}"`).get() as any;
+        counts[t.name] = row.count;
+      } catch { counts[t.name] = -1; }
+    }
+
+    const dbPath = process.env.DB_PATH ?? path.join(process.cwd(), 'borealismark.db');
+    const dbSize = existsSync(dbPath) ? statSync(dbPath).size : 0;
+
+    res.json({
+      success: true,
+      data: {
+        databaseSizeBytes: dbSize,
+        databaseSizeMB: (dbSize / 1024 / 1024).toFixed(2),
+        tableCount: tables.length,
+        tables: counts,
+      },
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, timestamp: Date.now() });
+  }
+});
+
 export default router;

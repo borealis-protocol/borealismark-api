@@ -1863,6 +1863,16 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_lsh_time ON license_score_history(computed_at);
   `);
 
+  // Migrate: add telemetry columns to license_score_history (Week 3 — v3.2 Pragmatic Trust)
+  const lshCols = (db.prepare("PRAGMA table_info(license_score_history)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!lshCols.includes('batch_id'))         db.exec("ALTER TABLE license_score_history ADD COLUMN batch_id TEXT");
+  if (!lshCols.includes('reporting_mode'))   db.exec("ALTER TABLE license_score_history ADD COLUMN reporting_mode TEXT DEFAULT 'self-reported'");
+  if (!lshCols.includes('payload_hash'))     db.exec("ALTER TABLE license_score_history ADD COLUMN payload_hash TEXT");
+  if (!lshCols.includes('suspicion_flags'))  db.exec("ALTER TABLE license_score_history ADD COLUMN suspicion_flags TEXT");
+  if (!lshCols.includes('raw_score_total'))  db.exec("ALTER TABLE license_score_history ADD COLUMN raw_score_total INTEGER");
+  if (!lshCols.includes('sequence_start'))   db.exec("ALTER TABLE license_score_history ADD COLUMN sequence_start INTEGER");
+  if (!lshCols.includes('sequence_end'))     db.exec("ALTER TABLE license_score_history ADD COLUMN sequence_end INTEGER");
+
   // Migrate: add verdict columns to debates table
   const debateCols = (db.prepare("PRAGMA table_info(debates)").all() as Array<{ name: string }>).map(r => r.name);
   if (!debateCols.includes('verdict_team'))    db.exec("ALTER TABLE debates ADD COLUMN verdict_team TEXT");

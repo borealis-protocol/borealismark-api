@@ -717,6 +717,144 @@ router.post('/verify', (req: Request, res: Response) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// POST /v1/licenses/telemetry — Submit telemetry for BTS scoring
+// The core v3.2 "Pragmatic Trust" endpoint. Accepts structured telemetry from
+// BTS-licensed agents, validates via Zod, computes BM Score through the existing
+// engine (zero changes), applies trust ceiling, runs Layer 2 anomaly detection,
+// persists to license_score_history, and anchors to Hedera HCS.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.post('/telemetry', async (req: Request, res: Response) => {
+  try {
+    const { processTelemetry } = await import('../engine/telemetry-pipeline');
+    const db = getDb();
+
+    // Extract key from payload for license lookup
+    const key = req.body?.key;
+    if (!key || typeof key !== 'string') {
+      res.status(400).json({
+        success: false,
+        error: 'MISSING_KEY',
+        message: 'BTS License Key is required in payload',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    // Validate key format before DB lookup
+    if (!/^BTS-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(key)) {
+      res.status(400).json({
+        success: false,
+        error: 'INVALID_KEY_FORMAT',
+        message: 'BTS key format: BTS-XXXX-XXXX-XXXX-XXXX',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const kHash = hashKey(key);
+    const license = db.prepare('SELECT * FROM merlin_licenses WHERE key_hash = ?').get(kHash) as any;
+
+    if (!license) {
+      res.status(404).json({
+        success: false,
+        error: 'INVALID_KEY',
+        message: 'BTS License Key not recognized',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    // Only active, bound licenses can submit telemetry
+    if (license.status !== 'active') {
+      res.status(403).json({
+        success: false,
+        error: `KEY_${license.status.toUpperCase()}`,
+        message: `This key is ${license.status}. Telemetry submission is disabled.`,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    if (!license.agent_id) {
+      res.status(400).json({
+        success: false,
+        error: 'KEY_NOT_ACTIVATED',
+        message: 'Activate this key and bind it to an agent before submitting telemetry.',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    // Rate limit: max 60 telemetry submissions per hour per license
+    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+    const recentSubmissions = db.prepare(
+      "SELECT COUNT(*) as cnt FROM license_audit_log WHERE license_id = ? AND event_type = 'telemetry.submitted' AND created_at > ?"
+    ).get(license.id, oneHourAgo) as any;
+
+    if (recentSubmissions.cnt >= 60) {
+      res.status(429).json({
+        success: false,
+        error: 'RATE_LIMITED',
+        message: 'Telemetry rate limit exceeded. Max 60 submissions per hour per key.',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    // Process through the pipeline
+    const result = await processTelemetry(req.body, license.id, license.agent_id, license.status);
+
+    if (!result.success) {
+      const errorResult = result as { success: false; error: string; details?: Record<string, any> };
+      res.status(400).json({
+        ...errorResult,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    // Log the telemetry event
+    const ip = getClientIp(req);
+    logLicenseEvent(license.id, 'telemetry.submitted', {
+      scoreId: result.scoreId,
+      batchId: result.batchId,
+      score: result.btsScore.total,
+      creditRating: result.btsScore.creditRating,
+      reportingMode: result.btsScore.reportingMode,
+      flagCount: result.suspicionFlags.flagCount,
+    }, license.user_id, ip);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        scoreId: result.scoreId,
+        agentId: result.agentId,
+        btsScore: result.btsScore,
+        suspicionFlags: {
+          flagCount: result.suspicionFlags.flagCount,
+          // Don't reveal specific flags to the reporter — prevents gaming
+          message: result.suspicionFlags.flagCount > 0
+            ? 'Some statistical patterns were flagged for review.'
+            : 'No anomalous patterns detected.',
+        },
+        hedera: result.hedera,
+        batchId: result.batchId,
+        computedAt: result.computedAt,
+      },
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: 'TELEMETRY_PROCESSING_FAILED',
+      message: 'Internal error processing telemetry',
+      timestamp: Date.now(),
+    });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // GET /v1/licenses/public/:agentId — Public verification lookup
 // Anyone can check if an agent has a valid BTS score. No key required.
 // This is the public trust verification endpoint.
