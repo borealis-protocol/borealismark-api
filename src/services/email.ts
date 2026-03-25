@@ -41,8 +41,8 @@ export async function sendPasswordResetEmail(
   resetToken: string,
   userName: string,
 ): Promise<boolean> {
-  const frontendUrl = process.env.FRONTEND_URL ?? 'https://borealisterminal.com';
-  const resetLink = `${frontendUrl}?reset=${resetToken}`;
+  const terminalUrl = (process.env.TERMINAL_URL ?? 'https://borealisterminal.com').replace(/\/$/, '');
+  const resetLink = `${terminalUrl}/?reset=${resetToken}`;
 
   const html = `
 <!DOCTYPE html>
