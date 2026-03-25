@@ -19,7 +19,7 @@
     "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": ["borealismark", "ai", "trust", "audit", "hedera", "blockchain", "api", "sdk"],
-  "author": "Borealis Protocol <support@borealisprotocol.ai>",
+  "author": "Borealis Protocol <support@borealismark.com>",
   "license": "MIT",
   "repository": {
     "type": "git",

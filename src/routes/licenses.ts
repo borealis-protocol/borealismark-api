@@ -390,7 +390,7 @@ router.post('/free', async (req: Request, res: Response) => {
           status: 'active',
           emailDelivered: false,
         },
-        message: 'Your key was generated but email delivery failed. Please contact support@borealisprotocol.ai to retrieve your key.',
+        message: 'Your key was generated but email delivery failed. Please contact support@borealismark.com to retrieve your key.',
         timestamp: Date.now(),
       });
       return;

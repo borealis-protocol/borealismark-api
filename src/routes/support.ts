@@ -18,8 +18,8 @@ import { Resend } from 'resend';
 const router = Router();
 
 // CRITICAL: Outbound emails MUST use verified branded domains — NEVER *.cloudflare.dev or *.workers.dev
-const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'BorealisMark Support <support@borealisprotocol.ai>';
-const VERIFY_FROM_ADDRESS = 'Borealis Terminal Verification <verify@borealisprotocol.ai>';
+const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'BorealisMark Support <support@borealismark.com>';
+const VERIFY_FROM_ADDRESS = 'Borealis Terminal Verification <verify@borealismark.com>';
 
 // Safety: ensure FROM addresses never use .dev or workers.dev domains
 function getSafeFromAddress(address: string): string {
@@ -102,7 +102,7 @@ router.post('/chat', async (req: Request, res: Response) => {
     logger.error('Support chat error', { error: err.message });
     res.status(500).json({
       success: false,
-      error: 'Support service temporarily unavailable. Please email support@borealisprotocol.ai.',
+      error: 'Support service temporarily unavailable. Please email support@borealismark.com.',
     });
   }
 });
@@ -159,7 +159,7 @@ router.post('/email-inbound', async (req: Request, res: Response) => {
       const replyFrom = getSafeFromAddress(isVerificationEmail ? VERIFY_FROM_ADDRESS : FROM_ADDRESS);
       const sigLine = isVerificationEmail
         ? 'Aurora — Borealis Terminal Verification\nverify@borealisterminal.com\nhttps://borealisterminal.com'
-        : 'Aurora — BorealisMark AI Support\nsupport@borealisprotocol.ai\nhttps://borealisprotocol.ai';
+        : 'Aurora — BorealisMark AI Support\nsupport@borealismark.com\nhttps://borealismark.com';
 
       const result = await resend.emails.send({
         from: replyFrom,

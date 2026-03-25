@@ -416,11 +416,11 @@
         if (data.success && data.data && data.data.reply) {
           addMessage(data.data.reply, false);
         } else {
-          addMessage(data.error || 'Something went wrong. Please try again or email support@borealisprotocol.ai.', false);
+          addMessage(data.error || 'Something went wrong. Please try again or email support@borealismark.com.', false);
         }
       } catch (err) {
         hideTyping();
-        addMessage('Connection error. Please check your internet and try again, or email us at support@borealisprotocol.ai.', false);
+        addMessage('Connection error. Please check your internet and try again, or email us at support@borealismark.com.', false);
       } finally {
         isSending = false;
         sendBtn.disabled = false;

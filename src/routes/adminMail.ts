@@ -130,7 +130,7 @@ function initMailSchema(): void {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 // CRITICAL: Outbound emails MUST use verified branded domains — NEVER *.cloudflare.dev or *.workers.dev
-const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'BorealisMark <support@borealisprotocol.ai>';
+const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'BorealisMark <support@borealismark.com>';
 const ADMIN_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL ?? 'esimon.ng@gmail.com';
 
 // Safety check on FROM address
@@ -201,7 +201,7 @@ function buildHtmlEmail(body: string, subject: string): string {
     <div class="logo"><span>Borealis</span>Mark</div>
     <div class="body-text">${body.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</div>
   </div>
-  <div class="footer">The Borealis Protocol &mdash; Blockchain-Anchored AI Trust</div>
+  <div class="footer">The Borealis Protocol - Blockchain-Anchored AI Trust</div>
 </div>
 </body>
 </html>`;
