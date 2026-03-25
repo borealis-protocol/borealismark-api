@@ -34,13 +34,29 @@ import { Router } from 'express';
 import { z } from 'zod';
 import crypto from 'crypto';
 import { v4 as uuid } from 'uuid';
+import rateLimit from 'express-rate-limit';
 import { getDb } from '../db/database';
 import { requireApiKey, requireScope } from '../middleware/auth';
 import { requireAuth, type AuthRequest, type JwtPayload } from './auth';
-import { auditLog } from '../middleware/logger';
+import { auditLog, logger } from '../middleware/logger';
 import { sendBTSKeyEmail } from '../services/email';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import type { Request, Response } from 'express';
+
+const publicBtsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({
+      success: false,
+      error: 'Rate limit exceeded. Max 30 requests per minute.',
+      code: 'RATE_LIMIT_EXCEEDED',
+      timestamp: Date.now(),
+    });
+  },
+});
 
 const router = Router();
 
@@ -355,7 +371,14 @@ router.post('/free', async (req: Request, res: Response) => {
     const delivered = await sendBTSKeyEmail(email, user.name || 'there', rawKey, keyPrefix);
 
     if (!delivered) {
-      // Key was created but email failed - still return success with key in response as fallback
+      // Key was created but email failed — log internally for support retrieval, never expose in response
+      logger.warn('BTS free key email delivery failed — key logged for support retrieval', {
+        licenseId,
+        keyPrefix,
+        rawKey,
+        email,
+        userId: user.id,
+      });
       res.status(201).json({
         success: true,
         data: {
@@ -366,10 +389,8 @@ router.post('/free', async (req: Request, res: Response) => {
           agentSlots: 1,
           status: 'active',
           emailDelivered: false,
-          key: rawKey,
-          warning: 'Email delivery failed. Store this key securely - it will NOT be shown again.',
         },
-        message: 'Free BTS key generated. Email delivery failed - key is shown above.',
+        message: 'Your key was generated but email delivery failed. Please contact support@borealisprotocol.ai to retrieve your key.',
         timestamp: Date.now(),
       });
       return;
@@ -999,7 +1020,7 @@ router.post('/telemetry', async (req: Request, res: Response) => {
 // This is the public trust verification endpoint.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.get('/public/:agentId', (req: Request, res: Response) => {
+router.get('/public/:agentId', publicBtsLimiter, (req: Request, res: Response) => {
   try {
     const { agentId } = req.params;
     const db = getDb();

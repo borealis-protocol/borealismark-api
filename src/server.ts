@@ -287,8 +287,11 @@ app.use((_req, res) => {
     available: [
       '/v1/auth', '/v1/agents', '/v1/trust', '/v1/network', '/v1/marks',
       '/v1/keys', '/v1/webhooks', '/v1/payments', '/v1/terminal', '/v1/marketplace',
-      '/v1/usage', '/v1/docs', '/v1/bots', '/v1/support', '/v1/analytics', '/v1/admin', '/v1/admin/mail',
-      '/v1/verification', '/v1/notifications', '/v1/growth', '/v1/ws', '/health',
+      '/v1/usage', '/v1/docs', '/v1/images', '/v1/bots', '/v1/support', '/v1/analytics',
+      '/v1/admin', '/v1/admin/mail', '/v1/verification', '/v1/verify', '/v1/notifications',
+      '/v1/growth', '/v1/audit', '/v1/licenses', '/v1/migration', '/v1/progression',
+      '/v1/spark', '/v1/debates', '/v1/game', '/v1/ws', '/health', '/health/detailed',
+      '/sitemap.xml',
     ],
     timestamp: Date.now(),
   });
