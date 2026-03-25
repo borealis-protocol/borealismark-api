@@ -38,6 +38,7 @@ import { getDb } from '../db/database';
 import { requireApiKey, requireScope } from '../middleware/auth';
 import { requireAuth, type AuthRequest, type JwtPayload } from './auth';
 import { auditLog } from '../middleware/logger';
+import { sendBTSKeyEmail } from '../services/email';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import type { Request, Response } from 'express';
 
@@ -54,9 +55,17 @@ const INACTIVITY_THRESHOLD_DAYS = 90;
 
 // Agent caps per user tier — users must upgrade to unlock more agent slots
 const TIER_AGENT_LIMITS: Record<string, number> = {
-  standard: 3,   // Free/standard tier: 3 agents
+  standard: 3,   // Standard tier: 3 agents
   pro: 10,       // Pro tier ($149/yr): 10 agents
   elite: 20,     // Elite tier ($349/yr): 20 agents
+};
+
+// BTS License Key tier — determines trust score ceiling at telemetry time
+// free  = no payment, max BM Score 65, hard cap of 1 active free key per email
+// pro   = $129.99 one-time, max BM Score 85 (self-reported) / 100 (sidecar)
+const LICENSE_TIER_SCORE_CEILING: Record<string, number> = {
+  free: 65,
+  pro: 85,   // Self-reported ceiling; sidecar-verified is uncapped at 100
 };
 
 // ─── Key Generation ───────────────────────────────────────────────────────────
@@ -253,6 +262,136 @@ const VerifySchema = z.object({
 
 const AdminActionSchema = z.object({
   reason: z.string().min(1).max(500),
+});
+
+const FreeKeySchema = z.object({
+  email: z.string().email('Must be a valid email address').max(255),
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POST /v1/licenses/free — Claim a free-tier BTS License Key
+// No payment required. Requires only an email address.
+// Rate limit: max 1 free key per email, ever.
+// Free tier: 1 agent slot, BM Score capped at 65.
+// Key is delivered by email. Account auto-created if email is new.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.post('/free', async (req: Request, res: Response) => {
+  try {
+    const parsed = FreeKeySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        details: parsed.error.flatten().fieldErrors,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const { email } = parsed.data;
+    const db = getDb();
+
+    // Check if email already has a free key (1 per email, ever)
+    const existingFreeKey = db.prepare(`
+      SELECT ml.id FROM merlin_licenses ml
+      JOIN users u ON ml.user_id = u.id
+      WHERE u.email = ? COLLATE NOCASE
+        AND ml.license_tier = 'free'
+        AND ml.status NOT IN ('revoked', 'terminated')
+    `).get(email) as any;
+
+    if (existingFreeKey) {
+      res.status(409).json({
+        success: false,
+        error: 'FREE_KEY_ALREADY_CLAIMED',
+        message: 'A free BTS key has already been issued to this email address. Each email is limited to one free key.',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    // Look up or auto-create user for this email
+    let user = db.prepare('SELECT id, email, name FROM users WHERE email = ? COLLATE NOCASE').get(email) as any;
+
+    if (!user) {
+      const userId = uuid();
+      const now = Date.now();
+      // Auto-create account with random password hash - they can set a password via forgot-password flow
+      const randomPasswordHash = crypto.randomBytes(32).toString('hex');
+      const nameFromEmail = email.split('@')[0].replace(/[^a-zA-Z0-9]/g, ' ').trim() || 'Borealis User';
+
+      db.prepare(`
+        INSERT INTO users (id, email, password_hash, name, tier, role, created_at, email_verified, active)
+        VALUES (?, ?, ?, ?, 'standard', 'user', ?, 0, 1)
+      `).run(userId, email.toLowerCase(), randomPasswordHash, nameFromEmail, now);
+
+      user = { id: userId, email: email.toLowerCase(), name: nameFromEmail };
+    }
+
+    // Generate free-tier BTS key
+    const { rawKey, keyHash, keyPrefix } = generateBTSKey();
+    const licenseId = uuid();
+    const now = Date.now();
+
+    db.prepare(`
+      INSERT INTO merlin_licenses (
+        id, key_hash, key_prefix, user_id, status,
+        purchase_price, purchase_currency, payment_method,
+        license_tier, created_at
+      ) VALUES (?, ?, ?, ?, 'active', 0, 'USD', 'free', 'free', ?)
+    `).run(licenseId, keyHash, keyPrefix, user.id, now);
+
+    logLicenseEvent(licenseId, 'license.generated', {
+      userId: user.id,
+      purchasePrice: 0,
+      paymentMethod: 'free',
+      licenseTier: 'free',
+      keyPrefix,
+      source: 'free-tier-claim',
+    }, 'free-tier', getClientIp(req));
+
+    // Email the key - raw key is transmitted exactly once
+    const delivered = await sendBTSKeyEmail(email, user.name || 'there', rawKey, keyPrefix);
+
+    if (!delivered) {
+      // Key was created but email failed - still return success with key in response as fallback
+      res.status(201).json({
+        success: true,
+        data: {
+          licenseId,
+          keyPrefix,
+          licenseTier: 'free',
+          scoreCeiling: 65,
+          agentSlots: 1,
+          status: 'active',
+          emailDelivered: false,
+          key: rawKey,
+          warning: 'Email delivery failed. Store this key securely - it will NOT be shown again.',
+        },
+        message: 'Free BTS key generated. Email delivery failed - key is shown above.',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    res.status(201).json({
+      success: true,
+      data: {
+        licenseId,
+        keyPrefix,
+        licenseTier: 'free',
+        scoreCeiling: 65,
+        agentSlots: 1,
+        status: 'active',
+        emailDelivered: true,
+      },
+      message: 'Free BTS key sent to ' + email + '. Check your inbox.',
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Failed to generate free license', timestamp: Date.now() });
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

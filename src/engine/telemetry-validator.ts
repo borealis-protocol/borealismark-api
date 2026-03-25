@@ -268,17 +268,29 @@ export function transformToScoringInput(payload: TelemetryPayload): {
 // ─── Trust Ceiling ───────────────────────────────────────────────────────────
 
 /**
- * Self-reported telemetry gets a trust ceiling of 850/1000 (display: 85).
- * Sidecar-verified telemetry is uncapped (max 1000 / display 100).
+ * Free-tier keys are hard-capped at 650/1000 (display: 65) regardless of
+ * reporting mode. This creates the upgrade incentive: pay $129.99 for Pro
+ * and unlock BM Score up to 85 (self-reported) or 100 (sidecar-verified).
  *
- * This creates a natural market incentive to adopt the Sidecar observer.
+ * Pro-tier keys follow the reporting-mode ceiling:
+ *   Self-reported:    max 850/1000 (display 85)
+ *   Sidecar-verified: max 1000/1000 (display 100, uncapped)
  */
+export const FREE_TIER_CEILING = 650; // Max BTS 65 (display) for free-tier keys
+
 export const TRUST_CEILING = {
-  'self-reported': 850,     // Max BTS 85 (display)
-  'sidecar-verified': 1000, // Uncapped
+  'self-reported': 850,     // Pro tier, self-reported: max BTS 85
+  'sidecar-verified': 1000, // Pro tier, sidecar-verified: uncapped
 } as const;
 
-export function applyTrustCeiling(rawScore: number, mode: TelemetryPayload['reportingMode']): number {
+export function applyTrustCeiling(
+  rawScore: number,
+  mode: TelemetryPayload['reportingMode'],
+  licenseTier: string = 'pro',
+): number {
+  if (licenseTier === 'free') {
+    return Math.min(rawScore, FREE_TIER_CEILING);
+  }
   const ceiling = TRUST_CEILING[mode];
   return Math.min(rawScore, ceiling);
 }

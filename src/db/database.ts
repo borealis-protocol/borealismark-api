@@ -1873,6 +1873,13 @@ function initSchema(db: Database.Database): void {
   if (!lshCols.includes('sequence_start'))   db.exec("ALTER TABLE license_score_history ADD COLUMN sequence_start INTEGER");
   if (!lshCols.includes('sequence_end'))     db.exec("ALTER TABLE license_score_history ADD COLUMN sequence_end INTEGER");
 
+  // Migrate: add license_tier column to merlin_licenses (Merlin Free Tier)
+  const licCols = (db.prepare("PRAGMA table_info(merlin_licenses)").all() as Array<{ name: string }>).map(r => r.name);
+  if (!licCols.includes('license_tier')) {
+    // Default 'pro' so all existing paid licenses are correctly marked as Pro tier
+    db.exec("ALTER TABLE merlin_licenses ADD COLUMN license_tier TEXT NOT NULL DEFAULT 'pro'");
+  }
+
   // Migrate: add verdict columns to debates table
   const debateCols = (db.prepare("PRAGMA table_info(debates)").all() as Array<{ name: string }>).map(r => r.name);
   if (!debateCols.includes('verdict_team'))    db.exec("ALTER TABLE debates ADD COLUMN verdict_team TEXT");
@@ -3863,12 +3870,26 @@ export function getOrdersByUser(userId: string, role: 'buyer' | 'seller', limit:
   return { orders, total };
 }
 
+// Columns permitted in updateOrderStatus() extraFields. Only these may be
+// interpolated into SQL to prevent injection via attacker-controlled keys.
+const ALLOWED_ORDER_UPDATE_COLUMNS = new Set([
+  'buyer_deposit_confirmed_at', 'seller_deposit_confirmed_at',
+  'shipping_carrier', 'tracking_number', 'shipped_at',
+  'delivery_confirmed_at', 'dispute_reason', 'dispute_raised_by', 'dispute_raised_at',
+  'rating', 'rating_comment', 'rated_at',
+  'completed_at', 'settled_at', 'settlement_type', 'hedera_transaction_id',
+  'hcs_topic_id', 'hcs_sequence_number',
+]);
+
 export function updateOrderStatus(orderId: string, status: string, extraFields?: Record<string, unknown>): boolean {
   const updates = ['status = ?', 'updated_at = ?'];
   const values: unknown[] = [status, Date.now()];
 
   if (extraFields) {
     for (const [key, value] of Object.entries(extraFields)) {
+      if (!ALLOWED_ORDER_UPDATE_COLUMNS.has(key)) {
+        throw new Error(`updateOrderStatus: column '${key}' is not in the allowed whitelist`);
+      }
       updates.push(`${key} = ?`);
       values.push(value);
     }

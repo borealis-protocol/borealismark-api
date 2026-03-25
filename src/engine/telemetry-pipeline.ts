@@ -25,6 +25,7 @@ import {
   detectSuspiciousPatterns,
   applyTrustCeiling,
   TRUST_CEILING,
+  FREE_TIER_CEILING,
   type TelemetryPayload,
   type SuspicionFlags,
 } from './telemetry-validator';
@@ -49,6 +50,7 @@ export interface TelemetryResult {
     breakdown: ScoreBreakdown;
     trustCeiling: number;
     reportingMode: string;
+    licenseTier: string;
   };
   suspicionFlags: SuspicionFlags;
   hedera: {
@@ -191,8 +193,11 @@ export async function processTelemetry(
 
   const rawTotal = breakdown.total;
 
-  // Step 4: Apply trust ceiling
-  const cappedTotal = applyTrustCeiling(rawTotal, payload.reportingMode);
+  // Step 4: Apply trust ceiling (tier-based + reporting mode)
+  // Free-tier keys are hard-capped at 650 (BTS 65) regardless of reporting mode
+  const licenseRow = getDb().prepare('SELECT license_tier FROM merlin_licenses WHERE id = ?').get(licenseId) as any;
+  const licenseTier: string = licenseRow?.license_tier ?? 'pro';
+  const cappedTotal = applyTrustCeiling(rawTotal, payload.reportingMode, licenseTier);
   const creditRating = getCreditRating(cappedTotal);
   const display = Math.round(cappedTotal / 10); // 0-100 display scale
 
@@ -307,8 +312,9 @@ export async function processTelemetry(
       rawTotal,
       creditRating,
       breakdown,
-      trustCeiling: TRUST_CEILING[payload.reportingMode],
+      trustCeiling: licenseTier === 'free' ? FREE_TIER_CEILING : TRUST_CEILING[payload.reportingMode],
       reportingMode: payload.reportingMode,
+      licenseTier,
     },
     suspicionFlags,
     hedera,
