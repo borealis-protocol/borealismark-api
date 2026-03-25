@@ -79,7 +79,7 @@ export async function sendPasswordResetEmail(
       <p class="small link">${resetLink}</p>
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol - AI Trust Certification
     </div>
   </div>
 </body>
@@ -95,7 +95,7 @@ ${resetLink}
 
 This link will expire in 1 hour. If you didn't request a password reset, you can safely ignore this email.
 
-— BorealisMark Protocol`;
+- BorealisMark Protocol`;
 
   // If no API key, log the email instead of sending
   if (!process.env.RESEND_API_KEY) {
@@ -174,7 +174,7 @@ export async function sendVerificationEmail(
       <p class="small link">${verifyLink}</p>
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol - AI Trust Certification
     </div>
   </div>
 </body>
@@ -190,7 +190,7 @@ ${verifyLink}
 
 This link will expire in 24 hours. If you didn't create this account, you can safely ignore this email.
 
-— BorealisMark Protocol`;
+- BorealisMark Protocol`;
 
   // If no API key, log the email instead of sending
   if (!process.env.RESEND_API_KEY) {
@@ -250,7 +250,7 @@ export async function sendSubscriptionExpiryReminder(
   const botWarning = botCount > botLimit
     ? `<div style="background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.3);border-radius:8px;padding:16px;margin:16px 0">
         <p style="color:#FF4444;font-weight:600;margin:0 0 8px 0">Bot Deactivation Warning</p>
-        <p style="color:#A0A0A0;margin:0;font-size:14px">You currently have <strong style="color:#fff">${botCount} active bots</strong>. The Standard plan allows <strong style="color:#fff">${botLimit} bots</strong>. If you don't renew, your <strong style="color:#FF4444">${botCount - botLimit} least active bots will be automatically suspended</strong>. Their data and history will be preserved — you can reactivate them by upgrading again.</p>
+        <p style="color:#A0A0A0;margin:0;font-size:14px">You currently have <strong style="color:#fff">${botCount} active bots</strong>. The Standard plan allows <strong style="color:#fff">${botLimit} bots</strong>. If you don't renew, your <strong style="color:#FF4444">${botCount - botLimit} least active bots will be automatically suspended</strong>. Their data and history will be preserved - you can reactivate them by upgrading again.</p>
       </div>`
     : '';
 
@@ -287,13 +287,13 @@ export async function sendSubscriptionExpiryReminder(
       <p class="small">Pay with USDC on Hedera and save 5% on your renewal. Your BM Scores, badges, and audit history are always preserved regardless of plan.</p>
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol - AI Trust Certification
     </div>
   </div>
 </body>
 </html>`;
 
-  const text = `${urgencyText}\n\nHi ${userName || 'there'},\n\nYour ${planName} subscription is expiring soon. Without renewal, your account will be downgraded to Standard.${botCount > botLimit ? `\n\nWARNING: You have ${botCount} active bots but Standard only allows ${botLimit}. Your ${botCount - botLimit} least active bots will be suspended.` : ''}\n\nRenew here: ${renewLink}\n\n— BorealisMark Protocol`;
+  const text = `${urgencyText}\n\nHi ${userName || 'there'},\n\nYour ${planName} subscription is expiring soon. Without renewal, your account will be downgraded to Standard.${botCount > botLimit ? `\n\nWARNING: You have ${botCount} active bots but Standard only allows ${botLimit}. Your ${botCount - botLimit} least active bots will be suspended.` : ''}\n\nRenew here: ${renewLink}\n\n- BorealisMark Protocol`;
 
   if (!process.env.RESEND_API_KEY) {
     logger.info('Subscription expiry reminder (NOT SENT — no RESEND_API_KEY)', {
@@ -306,7 +306,7 @@ export async function sendSubscriptionExpiryReminder(
     const result = await getResend().emails.send({
       from: FROM_ADDRESS,
       to: [toEmail],
-      subject: `${urgencyText} — BorealisMark ${planName}`,
+      subject: `${urgencyText} - BorealisMark ${planName}`,
       html,
       text,
     });
@@ -377,13 +377,13 @@ export async function sendDowngradeNotificationEmail(
       <p class="small">Your BM Scores, certifications, AP history, and badges are always preserved regardless of plan changes.</p>
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol - AI Trust Certification
     </div>
   </div>
 </body>
 </html>`;
 
-  const text = `Your ${previousPlan} subscription has expired.\n\nYour account has been downgraded to Standard (free).${suspendedBots.length > 0 ? `\n\nSuspended bots: ${suspendedBots.map(b => b.name).join(', ')}` : ''}\n\nUpgrade: ${upgradeLink}\n\n— BorealisMark Protocol`;
+  const text = `Your ${previousPlan} subscription has expired.\n\nYour account has been downgraded to Standard (free).${suspendedBots.length > 0 ? `\n\nSuspended bots: ${suspendedBots.map(b => b.name).join(', ')}` : ''}\n\nUpgrade: ${upgradeLink}\n\n- BorealisMark Protocol`;
 
   if (!process.env.RESEND_API_KEY) {
     logger.info('Downgrade notification (NOT SENT — no RESEND_API_KEY)', {
@@ -396,7 +396,7 @@ export async function sendDowngradeNotificationEmail(
     const result = await getResend().emails.send({
       from: FROM_ADDRESS,
       to: [toEmail],
-      subject: `Subscription Expired — ${suspendedBots.length > 0 ? `${suspendedBots.length} bots suspended` : 'Account downgraded'}`,
+      subject: `Subscription Expired - ${suspendedBots.length > 0 ? `${suspendedBots.length} bots suspended` : 'Account downgraded'}`,
       html,
       text,
     });
@@ -454,7 +454,7 @@ function orderEmailBase(title: string, body: string): string {
       ${body}
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; The Trust-Gated Exchange
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol - The Trust-Gated Exchange
     </div>
   </div>
 </body>
@@ -502,8 +502,8 @@ export async function sendOrderConfirmationEmail(
     <p class="detail"><strong>Memo:</strong> ${data.memo}</p>
     <p>After sending, click "Verify Payment" in your order page. You have 30 minutes to complete the deposit.</p>
   `);
-  const text = `Order Confirmed — ${data.listingTitle}\nOrder ID: ${data.orderId}\nTotal: $${data.totalCad.toFixed(2)} CAD (${data.totalUsdc.toFixed(6)} USDC)\nSend ${data.totalUsdc.toFixed(6)} USDC to ${data.treasuryAccountId} with memo: ${data.memo}`;
-  return sendOrderEmail(buyerEmail, `Order Confirmed — ${data.listingTitle}`, html, text);
+  const text = `Order Confirmed - ${data.listingTitle}\nOrder ID: ${data.orderId}\nTotal: $${data.totalCad.toFixed(2)} CAD (${data.totalUsdc.toFixed(6)} USDC)\nSend ${data.totalUsdc.toFixed(6)} USDC to ${data.treasuryAccountId} with memo: ${data.memo}`;
+  return sendOrderEmail(buyerEmail, `Order Confirmed - ${data.listingTitle}`, html, text);
 }
 
 /**
@@ -513,7 +513,7 @@ export async function sendSellerDepositRequestEmail(
   sellerEmail: string,
   data: OrderEmailData & { bondUsdc: number; memo: string; treasuryAccountId: string },
 ): Promise<boolean> {
-  const html = orderEmailBase('Buyer Payment Received — Trust Bond Required', `
+  const html = orderEmailBase('Buyer Payment Received - Trust Bond Required', `
     <p>Hi ${data.sellerName},</p>
     <p>A buyer has deposited payment for your listing. To proceed, please deposit your 25% trust bond.</p>
     <div class="divider"></div>
@@ -527,12 +527,12 @@ export async function sendSellerDepositRequestEmail(
     <p class="detail"><strong>Memo:</strong> ${data.memo}</p>
     <p>This bond will be returned to you after the buyer confirms delivery.</p>
   `);
-  const text = `Trust Bond Required — Order ${data.orderId}\nItem: ${data.listingTitle}\nBond: ${data.bondUsdc.toFixed(6)} USDC to ${data.treasuryAccountId} with memo: ${data.memo}`;
-  return sendOrderEmail(sellerEmail, `Trust Bond Required — ${data.listingTitle}`, html, text);
+  const text = `Trust Bond Required - Order ${data.orderId}\nItem: ${data.listingTitle}\nBond: ${data.bondUsdc.toFixed(6)} USDC to ${data.treasuryAccountId} with memo: ${data.memo}`;
+  return sendOrderEmail(sellerEmail, `Trust Bond Required - ${data.listingTitle}`, html, text);
 }
 
 /**
- * 3. Escrow Active — sent to both parties when both deposits confirmed
+ * 3. Escrow Active - sent to both parties when both deposits confirmed
  */
 export async function sendEscrowActiveEmail(
   email: string,
@@ -542,7 +542,7 @@ export async function sendEscrowActiveEmail(
   const action = data.isSeller
     ? 'Please ship the item and add tracking information in your seller dashboard.'
     : 'The seller has been notified to ship your item. You will receive tracking information soon.';
-  const html = orderEmailBase('Escrow Active — Both Deposits Confirmed', `
+  const html = orderEmailBase('Escrow Active - Both Deposits Confirmed', `
     <p>Hi ${name},</p>
     <p>Both deposits have been confirmed. The escrow is now active for this transaction.</p>
     <div class="divider"></div>
@@ -552,12 +552,12 @@ export async function sendEscrowActiveEmail(
     <div class="divider"></div>
     <p>${action}</p>
   `);
-  const text = `Escrow Active — Order ${data.orderId}\nItem: ${data.listingTitle}\n${action}`;
-  return sendOrderEmail(email, `Escrow Active — ${data.listingTitle}`, html, text);
+  const text = `Escrow Active - Order ${data.orderId}\nItem: ${data.listingTitle}\n${action}`;
+  return sendOrderEmail(email, `Escrow Active - ${data.listingTitle}`, html, text);
 }
 
 /**
- * 4. Shipped — sent to buyer with tracking info
+ * 4. Shipped - sent to buyer with tracking info
  */
 export async function sendShippedEmail(
   buyerEmail: string,
@@ -574,18 +574,18 @@ export async function sendShippedEmail(
     <div class="divider"></div>
     <p>Once you receive the item, please confirm delivery in your dashboard to release the escrow funds.</p>
   `);
-  const text = `Shipped — Order ${data.orderId}\nItem: ${data.listingTitle}\nCarrier: ${data.carrier}\nTracking: ${data.trackingNumber}`;
-  return sendOrderEmail(buyerEmail, `Shipped — ${data.listingTitle}`, html, text);
+  const text = `Shipped - Order ${data.orderId}\nItem: ${data.listingTitle}\nCarrier: ${data.carrier}\nTracking: ${data.trackingNumber}`;
+  return sendOrderEmail(buyerEmail, `Shipped - ${data.listingTitle}`, html, text);
 }
 
 /**
- * 5. Delivery Confirmed — sent to seller
+ * 5. Delivery Confirmed - sent to seller
  */
 export async function sendDeliveryConfirmedEmail(
   sellerEmail: string,
   data: OrderEmailData,
 ): Promise<boolean> {
-  const html = orderEmailBase('Delivery Confirmed — Settlement Processing', `
+  const html = orderEmailBase('Delivery Confirmed - Settlement Processing', `
     <p>Hi ${data.sellerName},</p>
     <p>The buyer has confirmed delivery of your item. Settlement is being processed.</p>
     <div class="divider"></div>
@@ -595,8 +595,8 @@ export async function sendDeliveryConfirmedEmail(
     <div class="divider"></div>
     <p>Your payment and trust bond return will be processed shortly.</p>
   `);
-  const text = `Delivery Confirmed — Order ${data.orderId}\nSettlement processing for ${data.listingTitle}`;
-  return sendOrderEmail(sellerEmail, `Delivery Confirmed — ${data.listingTitle}`, html, text);
+  const text = `Delivery Confirmed - Order ${data.orderId}\nSettlement processing for ${data.listingTitle}`;
+  return sendOrderEmail(sellerEmail, `Delivery Confirmed - ${data.listingTitle}`, html, text);
 }
 
 /**
@@ -632,8 +632,8 @@ export async function sendSettlementCompleteEmail(
     <div class="divider"></div>
     <p>Thank you for using the Borealis Terminal marketplace. All transactions are anchored on Hedera for immutable proof.</p>
   `);
-  const text = `Transaction Complete — Order ${data.orderId}\nItem: ${data.listingTitle}`;
-  return sendOrderEmail(email, `Transaction Complete — ${data.listingTitle}`, html, text);
+  const text = `Transaction Complete - Order ${data.orderId}\nItem: ${data.listingTitle}`;
+  return sendOrderEmail(email, `Transaction Complete - ${data.listingTitle}`, html, text);
 }
 
 // ─── Admin Notification Emails ──────────────────────────────────────────────
@@ -686,7 +686,7 @@ export async function sendAdminNewUserNotification(
       <div class="divider"></div>
       <p class="detail" style="color:#666">View all users in the admin dashboard.</p>
     </div>
-    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol — Admin Notification</div>
+    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol - Admin Notification</div>
   </div>
 </body>
 </html>`;
@@ -777,7 +777,7 @@ export async function sendAdminSubscriptionNotification(
       <p class="detail"><strong>User ID:</strong> <span style="font-family:monospace;font-size:12px">${userId}</span></p>
       <p class="detail"><strong>Time:</strong> ${timestamp}</p>
     </div>
-    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol — Admin Notification</div>
+    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol - Admin Notification</div>
   </div>
 </body>
 </html>`;
@@ -858,7 +858,7 @@ export async function sendAdminVerificationNotification(
       <div class="divider"></div>
       <p class="detail" style="color:#666">Review and approve or reject in the admin dashboard.</p>
     </div>
-    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol — Admin Notification</div>
+    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol - Admin Notification</div>
   </div>
 </body>
 </html>`;
@@ -956,15 +956,15 @@ export async function sendVerificationResultEmail(
       }
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol - AI Trust Certification
     </div>
   </div>
 </body>
 </html>`;
 
   const text = approved
-    ? `Verification Approved\n\nHi ${userName || 'there'},\n\nCongratulations! Your ${verificationType} verification has been approved.\n\nVerification Type: ${verificationType}\nStatus: APPROVED\nApproved: ${timestamp}\n\nYou have earned ${trustPointsEarned ?? 10} trust points for completing this verification.\n\n— BorealisMark Protocol`
-    : `Verification Update\n\nHi ${userName || 'there'},\n\nYour ${verificationType} verification could not be approved at this time.\n\nVerification Type: ${verificationType}\nStatus: UPDATE REQUIRED\n${reason ? `Reason: ${reason}\n` : ''}\nPlease resubmit your verification in your account settings.\n\n— BorealisMark Protocol`;
+    ? `Verification Approved\n\nHi ${userName || 'there'},\n\nCongratulations! Your ${verificationType} verification has been approved.\n\nVerification Type: ${verificationType}\nStatus: APPROVED\nApproved: ${timestamp}\n\nYou have earned ${trustPointsEarned ?? 10} trust points for completing this verification.\n\n- BorealisMark Protocol`
+    : `Verification Update\n\nHi ${userName || 'there'},\n\nYour ${verificationType} verification could not be approved at this time.\n\nVerification Type: ${verificationType}\nStatus: UPDATE REQUIRED\n${reason ? `Reason: ${reason}\n` : ''}\nPlease resubmit your verification in your account settings.\n\n- BorealisMark Protocol`;
 
   if (!process.env.RESEND_API_KEY) {
     logger.info(`Verification result email (NOT SENT — no RESEND_API_KEY): ${approved ? 'approved' : 'rejected'}`, {
@@ -979,7 +979,7 @@ export async function sendVerificationResultEmail(
     const result = await getResend().emails.send({
       from: FROM_ADDRESS,
       to: [toEmail],
-      subject: `Verification ${approved ? 'Approved' : 'Update'} — BorealisMark`,
+      subject: `Verification ${approved ? 'Approved' : 'Update'} - BorealisMark`,
       html,
       text,
     });
@@ -1053,13 +1053,13 @@ export async function sendOrderNotificationEmail(
       <p class="small">You received this email because you have order notifications enabled. You can manage your notification preferences in your dashboard settings.</p>
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; Borealis Terminal
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol - Borealis Terminal
     </div>
   </div>
 </body>
 </html>`;
 
-  const text = `${titles[eventType] || 'Order Update'}\n\nHi ${userName || 'there'},\n\n${message}\n\nView your orders: ${orderLink}\n\n— Borealis Terminal`;
+  const text = `${titles[eventType] || 'Order Update'}\n\nHi ${userName || 'there'},\n\n${message}\n\nView your orders: ${orderLink}\n\n- Borealis Terminal`;
 
   if (!process.env.RESEND_API_KEY) {
     logger.info('Order notification email (NOT SENT — no RESEND_API_KEY)', { to: toEmail, eventType });
@@ -1070,7 +1070,7 @@ export async function sendOrderNotificationEmail(
     const result = await getResend().emails.send({
       from: FROM_ADDRESS,
       to: [toEmail],
-      subject: `${titles[eventType] || 'Order Update'} — Borealis Terminal`,
+      subject: `${titles[eventType] || 'Order Update'} - Borealis Terminal`,
       html,
       text,
     });
@@ -1140,7 +1140,7 @@ export async function sendPaymentNotificationEmail(
 </body>
 </html>`;
 
-  const text = `${titles[eventType]}\n\nHi ${userName},\n\n${details}\n\nView: ${link}\n\n— Borealis Terminal`;
+  const text = `${titles[eventType]}\n\nHi ${userName},\n\n${details}\n\nView: ${link}\n\n- Borealis Terminal`;
 
   if (!process.env.RESEND_API_KEY) {
     logger.info('Payment notification email (NOT SENT)', { to: toEmail, eventType });
@@ -1151,7 +1151,7 @@ export async function sendPaymentNotificationEmail(
     const result = await getResend().emails.send({
       from: FROM_ADDRESS,
       to: [toEmail],
-      subject: `${titles[eventType]} — Borealis Terminal`,
+      subject: `${titles[eventType]} - Borealis Terminal`,
       html,
       text,
     });
@@ -1210,7 +1210,7 @@ export async function sendVerificationNotificationEmail(
 </body>
 </html>`;
 
-  const text = `Verification Complete\n\nHi ${userName},\n\n${message}\n\nView your trust profile: ${trustLink}\n\n— Borealis Terminal`;
+  const text = `Verification Complete\n\nHi ${userName},\n\n${message}\n\nView your trust profile: ${trustLink}\n\n- Borealis Terminal`;
 
   if (!process.env.RESEND_API_KEY) {
     logger.info('Verification notification email (NOT SENT)', { to: toEmail });
@@ -1221,7 +1221,7 @@ export async function sendVerificationNotificationEmail(
     const result = await getResend().emails.send({
       from: FROM_ADDRESS,
       to: [toEmail],
-      subject: 'Verification Complete — Borealis Terminal',
+      subject: 'Verification Complete - Borealis Terminal',
       html,
       text,
     });
@@ -1283,13 +1283,13 @@ export async function sendBTSKeyEmail(
     <div class="card">
       <div class="logo">BorealisMark</div>
       <h1>Your BTS License Key</h1>
-      <p class="subtitle">Merlin AI Trust Scoring — Order Confirmation</p>
+      <p class="subtitle">Merlin AI Trust Scoring - Order Confirmation</p>
 
       <p>Hi ${userName || 'there'},</p>
-      <p>Your purchase is confirmed. Below is your BTS License Key. This key is shown <strong style="color:#fff">exactly once</strong> — save it now.</p>
+      <p>Your purchase is confirmed. Below is your BTS License Key. This key is shown <strong style="color:#fff">exactly once</strong> - save it now.</p>
 
       <div class="key-block">
-        <div class="key-label">BTS License Key &mdash; ${keyPrefix}...</div>
+        <div class="key-label">BTS License Key - ${keyPrefix}...</div>
         <div class="key-value">${btsKey}</div>
       </div>
 
@@ -1297,7 +1297,7 @@ export async function sendBTSKeyEmail(
         <div class="warning-title">⚠ Permanent Binding Warning</div>
         <p class="warning-text">
           When you activate this key, it binds <strong>permanently</strong> to one AI agent. This binding cannot be reversed or transferred.
-          If you later need a new key, <strong>both this key and its bound agent will be permanently terminated</strong> — all trust scores for that agent will be marked as terminated on the public record.
+          If you later need a new key, <strong>both this key and its bound agent will be permanently terminated</strong> - all trust scores for that agent will be marked as terminated on the public record.
           <strong>Choose your agent carefully before activating.</strong>
         </p>
       </div>
@@ -1306,30 +1306,30 @@ export async function sendBTSKeyEmail(
         <div class="steps-title">Activation Steps</div>
         <div class="step"><span class="step-num">1</span>Log in to your BorealisMark dashboard and navigate to <strong style="color:#fff">My Licenses</strong>.</div>
         <div class="step"><span class="step-num">2</span>Click <strong style="color:#fff">Activate Key</strong> and enter your key or use the API endpoint <code>POST /v1/licenses/activate</code>.</div>
-        <div class="step"><span class="step-num">3</span>Select an existing agent or register a new one — this binds the key permanently.</div>
+        <div class="step"><span class="step-num">3</span>Select an existing agent or register a new one - this binds the key permanently.</div>
         <div class="step"><span class="step-num">4</span>Integrate via the <code>@borealis/merlin-sdk</code> (coming soon) or call <code>/v1/licenses/verify</code> directly to submit telemetry and generate BTS scores.</div>
       </div>
 
       <a href="${dashboardUrl}" class="btn">Go to Dashboard</a>
 
       <div class="divider"></div>
-      <p class="small">Save this email. Your raw BTS key will <strong>never be shown again</strong> — only the key prefix (<code>${keyPrefix}...</code>) is visible in your dashboard for identification. If you lose this key before activating it, contact support to have it replaced (the old key will be permanently terminated).</p>
+      <p class="small">Save this email. Your raw BTS key will <strong>never be shown again</strong> - only the key prefix (<code>${keyPrefix}...</code>) is visible in your dashboard for identification. If you lose this key before activating it, contact support to have it replaced (the old key will be permanently terminated).</p>
     </div>
     <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol &mdash; AI Trust Certification<br>
+      &copy; ${new Date().getFullYear()} BorealisMark Protocol - AI Trust Certification<br>
       <span style="color:#333">This email was sent to ${toEmail} because you purchased a Merlin BTS License Key.</span>
     </div>
   </div>
 </body>
 </html>`;
 
-  const text = `Your BTS License Key — BorealisMark
+  const text = `Your BTS License Key - BorealisMark
 
 Hi ${userName || 'there'},
 
 Your Merlin BTS License Key purchase is confirmed.
 
-YOUR KEY (save this — shown ONCE):
+YOUR KEY (save this - shown ONCE):
 ${btsKey}
 
 ⚠ PERMANENT BINDING WARNING:
@@ -1343,10 +1343,10 @@ ACTIVATION STEPS:
 3. Select or register the agent you want to bind permanently
 4. Integrate via @borealis/merlin-sdk or call /v1/licenses/verify directly for trust scoring
 
-Save this email — your raw key will NEVER be shown again.
+Save this email - your raw key will NEVER be shown again.
 Only the key prefix (${keyPrefix}...) is visible in your dashboard.
 
-— BorealisMark Protocol`;
+- BorealisMark Protocol`;
 
   if (!process.env.RESEND_API_KEY) {
     logger.info('BTS key email (NOT SENT — no RESEND_API_KEY)', {
@@ -1354,14 +1354,14 @@ Only the key prefix (${keyPrefix}...) is visible in your dashboard.
       keyPrefix,
       // Never log the raw key
     });
-    return true;
+    return false;
   }
 
   try {
     const result = await getResend().emails.send({
       from: FROM_ADDRESS,
       to: [toEmail],
-      subject: `Your BTS License Key — ${keyPrefix}... (save this email)`,
+      subject: `Your BTS License Key - ${keyPrefix}... (save this email)`,
       html,
       text,
     });

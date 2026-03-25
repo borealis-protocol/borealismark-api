@@ -57,8 +57,7 @@ import { events as eventBus } from '../services/eventBus';
 const router = Router();
 
 // ─── Webhook Idempotency ─────────────────────────────────────────────────────
-// Track processed Stripe webhook event IDs to prevent double-processing
-const processedWebhookIds = new Set<string>();
+// Idempotency is tracked in the processed_webhooks DB table (survives restarts)
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -222,7 +221,7 @@ router.post('/checkout', async (req: Request, res: Response) => {
         priceId: MERLIN_PRODUCT.priceId,
         customerEmail: body.email,
         userId: body.userId,
-        successUrl: body.successUrl ?? `${process.env.FRONTEND_URL ?? 'https://borealisterminal.com'}/dashboard.html?payment=success&product=merlin`,
+        successUrl: body.successUrl ?? `${process.env.FRONTEND_URL ?? 'https://borealisterminal.com'}/#merlin-success`,
         cancelUrl: body.cancelUrl ?? `${process.env.FRONTEND_URL ?? 'https://borealisterminal.com'}#merlin`,
       });
 
@@ -879,9 +878,11 @@ router.post('/webhook', async (req: Request, res: Response) => {
   try {
     const event = constructWebhookEvent(req.body, sig);
 
-    // Idempotency check: skip if this event has already been processed
-    if (processedWebhookIds.has(event.id)) {
-      logger.info('Webhook already processed', { type: event.type, id: event.id });
+    // Idempotency check: skip if this event has already been processed (DB-backed)
+    const db = getDb();
+    const existing = db.prepare('SELECT event_id FROM processed_webhooks WHERE event_id = ?').get(event.id);
+    if (existing) {
+      logger.info('Webhook already processed (DB check)', { type: event.type, id: event.id });
       return res.json({ received: true });
     }
 
@@ -930,6 +931,13 @@ router.post('/webhook', async (req: Request, res: Response) => {
               rawKey,
               keyPrefix,
             );
+
+            if (!delivered) {
+              logger.error('CRITICAL: Merlin key email delivery FAILED', {
+                licenseId, keyPrefix, userId, email: customerEmail,
+                // DO NOT log rawKey here
+              });
+            }
 
             logger.info('Merlin license generated and emailed', {
               licenseId,
@@ -1103,8 +1111,10 @@ router.post('/webhook', async (req: Request, res: Response) => {
         logger.info('Unhandled webhook event', { type: event.type });
     }
 
-    // Mark this webhook as processed
-    processedWebhookIds.add(event.id);
+    // Mark this webhook as processed in DB
+    db.prepare('INSERT OR IGNORE INTO processed_webhooks (event_id, event_type, processed_at) VALUES (?, ?, ?)').run(
+      event.id, event.type, new Date().toISOString(),
+    );
 
     res.json({ received: true });
   } catch (err: any) {
