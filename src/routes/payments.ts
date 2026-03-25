@@ -917,7 +917,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
             const { licenseId, rawKey, keyPrefix } = generateLicenseInternal({
               userId,
               orderId: session.id,
-              purchasePrice: 129.99,
+              purchasePrice: 39.99,
               purchaseCurrency: 'USD',
               paymentMethod: 'stripe',
             });

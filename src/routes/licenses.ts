@@ -78,7 +78,7 @@ const TIER_AGENT_LIMITS: Record<string, number> = {
 
 // BTS License Key tier — determines trust score ceiling at telemetry time
 // free  = no payment, max BM Score 65, hard cap of 1 active free key per email
-// pro   = $129.99 one-time, max BM Score 85 (self-reported) / 100 (sidecar)
+// pro   = $39.99 one-time, max BM Score 85 (self-reported) / 100 (sidecar)
 const LICENSE_TIER_SCORE_CEILING: Record<string, number> = {
   free: 65,
   pro: 85,   // Self-reported ceiling; sidecar-verified is uncapped at 100
@@ -153,7 +153,7 @@ export function generateLicenseInternal(params: {
     keyPrefix,
     params.userId,
     params.orderId ?? null,
-    params.purchasePrice ?? 129.99,
+    params.purchasePrice ?? 39.99,
     params.purchaseCurrency ?? 'USD',
     params.paymentMethod ?? 'stripe',
     now,
@@ -237,7 +237,7 @@ function terminateLicense(
 const GenerateSchema = z.object({
   userId: z.string().min(1),
   orderId: z.string().optional(),
-  purchasePrice: z.number().default(129.99),
+  purchasePrice: z.number().default(39.99),
   purchaseCurrency: z.string().default('USD'),
   paymentMethod: z.enum(['stripe', 'usdc']).default('stripe'),
 });
