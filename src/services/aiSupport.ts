@@ -1,17 +1,16 @@
 /**
- * BorealisMark — AI Support Service
+ * BorealisMark - AI Support Service
  *
- * Autonomous AI support agent powered by Anthropic Claude.
+ * Autonomous AI support agent powered by Groq (Llama 3.3 70B).
  * Handles both live chat (frontend widget) and inbound email support.
  *
  * Uses a comprehensive knowledge base about the BorealisMark Protocol ecosystem
  * so the AI can answer questions about pricing, features, Hedera integration,
  * bot deployment, marketplace, USDC payments, and more.
  *
- * Required env var: ANTHROPIC_API_KEY
+ * Required env var: GROQ_API_KEY
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { v4 as uuid } from 'uuid';
 import { logger } from '../middleware/logger';
 import {
@@ -22,49 +21,49 @@ import {
 } from '../db/database';
 import { events as eventBus } from './eventBus';
 
-// ─── Knowledge Base ──────────────────────────────────────────────────────────
+// --- Knowledge Base -----------------------------------------------------------
 
 const BOREALISMARK_KNOWLEDGE_BASE = `
-# BorealisMark Protocol — Complete Knowledge Base
+# BorealisMark Protocol - Complete Knowledge Base
 ## Last Updated: March 2026
 
 ## 1. WHAT IS BOREALISMARK?
-BorealisMark Protocol is the world's first blockchain-anchored AI trust certification platform built on the Hedera Hashgraph network. It provides cryptographic proof of AI agent integrity through BM Scores (BorealisMark Scores) — trust ratings that are anchored immutably on-chain via the Hedera Consensus Service (HCS).
+BorealisMark Protocol is the world's first blockchain-anchored AI trust certification platform built on the Hedera Hashgraph network. It provides cryptographic proof of AI agent integrity through BM Scores (BorealisMark Scores) - trust ratings that are anchored immutably on-chain via the Hedera Consensus Service (HCS).
 
 ### Core Mission
-To establish a universal trust standard for AI agents, enabling businesses and consumers to verify that an AI system has been independently audited for safety, accuracy, bias, and reliability — with proof that can never be tampered with.
+To establish a universal trust standard for AI agents, enabling businesses and consumers to verify that an AI system has been independently audited for safety, accuracy, bias, and reliability - with proof that can never be tampered with.
 
 ### How It Works
 1. Users register AI agents/bots on the platform
 2. Agents undergo cryptographic audits (safety, accuracy, bias, hallucination checks)
 3. Each audit result generates a BM Score (0-100)
-4. The audit hash is anchored to Hedera's public ledger via HCS (Topic ID: 0.0.8859451)
+4. The audit hash is anchored to Hedera's public ledger via HCS (Topic ID: 0.0.10382960)
 5. Anyone can independently verify a certificate by checking the Hedera transaction
 
 ## 2. THE THREE PILLARS (WEBSITES)
 
-### BorealisMark.com — The Hub
+### BorealisMark.com - The Hub
 - Primary user dashboard, registration, billing, bot management
 - Agent Plans (subscription tiers)
 - API key management
 - Bot deployment and monitoring
 - URL: https://borealismark.com
 
-### BorealisProtocol.ai — The Protocol
+### BorealisProtocol.ai - The Protocol
 - Developer-facing documentation and API reference
 - Technical whitepaper and roadmap
 - API tier pricing and onboarding
 - Protocol governance information
 - URL: https://borealisprotocol.ai
 
-### BorealisTerminal.com — The Marketplace
+### BorealisTerminal.com - The Marketplace
 - Trust-gated peer-to-peer marketplace
 - USDC escrow system with seller trust bonds (25%)
 - Only BorealisMark-certified sellers can list
 - Real-time bot leaderboard
 - URL: https://borealisterminal.com
 
-## 3. PRICING — AGENT PLANS (Annual)
+## 3. PRICING - AGENT PLANS (Annual)
 
 ### Standard (Free)
 - Up to 3 bot deployments
@@ -74,7 +73,7 @@ To establish a universal trust standard for AI agents, enabling businesses and c
 - 2.5% transaction fee on marketplace
 - Standard audit queue
 
-### Pro — $149/year (FREE FIRST YEAR for early adopters!)
+### Pro - $149/year (FREE FIRST YEAR for early adopters!)
 - Up to 10 bot deployments
 - 3x AP (Agent Points) multiplier
 - Priority audit queue
@@ -84,7 +83,7 @@ To establish a universal trust standard for AI agents, enabling businesses and c
 - 25,000 API requests/month
 - 2.5% transaction fee
 
-### Elite — $349/year
+### Elite - $349/year
 - Up to 50 bot deployments
 - 5x AP multiplier
 - Dedicated audit pipeline
@@ -99,7 +98,7 @@ All plans can be paid with USDC on Hedera for a 5% discount:
 - Pro: $141.55 USDC (instead of $149)
 - Elite: $331.55 USDC (instead of $349)
 
-## 4. PRICING — API TIERS (Monthly, for developers)
+## 4. PRICING - API TIERS (Monthly, for developers)
 
 ### Free Tier
 - 5,000 requests/month
@@ -107,14 +106,14 @@ All plans can be paid with USDC on Hedera for a 5% discount:
 - Basic endpoints only
 - Community support
 
-### Starter — $29/month ($27.55 USDC)
+### Starter - $29/month ($27.55 USDC)
 - 25,000 requests/month
 - 10 agent registrations
 - All endpoints
 - Email support
 - Webhook integrations
 
-### Business — $149/month ($141.55 USDC)
+### Business - $149/month ($141.55 USDC)
 - 100,000 requests/month
 - 50 agent registrations
 - All endpoints + batch operations
@@ -122,7 +121,7 @@ All plans can be paid with USDC on Hedera for a 5% discount:
 - Custom webhooks
 - Analytics API
 
-### Enterprise — $499/month ($474.05 USDC)
+### Enterprise - $499/month ($474.05 USDC)
 - Unlimited requests
 - Unlimited agent registrations
 - All endpoints + batch + streaming
@@ -165,17 +164,17 @@ All plans can be paid with USDC on Hedera for a 5% discount:
 ### How It Works
 1. Certified sellers list products/services
 2. Buyers browse and purchase with USDC
-3. Payment goes to escrow (BorealisMark Treasury: 0.0.10277625)
+3. Payment goes to escrow (BorealisMark Treasury: 0.0.10382966)
 4. Seller deposits a 25% trust bond
 5. After buyer confirms delivery, escrow releases funds
 6. Both parties get rated
 
 ### Escrow Flow
-- Buyer deposits full amount → "buyer_deposited"
-- Seller deposits 25% bond → "escrow_active"
-- Seller ships item → "shipped" (tracking provided)
-- Buyer confirms delivery → "delivered"
-- Settlement: seller receives payment minus fee, bond returned → "settled"
+- Buyer deposits full amount -> "buyer_deposited"
+- Seller deposits 25% bond -> "escrow_active"
+- Seller ships item -> "shipped" (tracking provided)
+- Buyer confirms delivery -> "delivered"
+- Settlement: seller receives payment minus fee, bond returned -> "settled"
 
 ### Trust Gating
 Only sellers with a minimum BM Score can list on the marketplace. This ensures quality and reduces fraud.
@@ -190,7 +189,7 @@ Only sellers with a minimum BM Score can list on the marketplace. This ensures q
 - ABFT (Asynchronous Byzantine Fault Tolerant) consensus
 
 ### What's On-Chain
-- Audit certificate hashes (via HCS Topic 0.0.8859451)
+- Audit certificate hashes (via HCS Topic 0.0.10382960)
 - USDC payment verification (Token ID: 0.0.456858)
 - Escrow settlements
 - Bot registration proofs
@@ -212,7 +211,7 @@ Anyone can verify a BorealisMark certificate by:
 ### Payment Flow
 1. User selects USDC at checkout
 2. System generates an invoice with amount + memo
-3. User sends USDC to Treasury (0.0.10277625) with the memo
+3. User sends USDC to Treasury (0.0.10382966) with the memo
 4. System verifies payment via Hedera Mirror Node
 5. Subscription/purchase is activated
 
@@ -229,7 +228,7 @@ Anyone can verify a BorealisMark certificate by:
 
 ### AI Moderation
 - Automated message moderation with pattern matching
-- Severity-based sanctions (warning → mute → suspension)
+- Severity-based sanctions (warning -> mute -> suspension)
 - Periodic server-side moderation scans every 30 minutes
 - Content filtering on marketplace listings
 
@@ -258,17 +257,17 @@ Anyone can verify a BorealisMark certificate by:
 https://borealismark-api.onrender.com/v1
 
 ### Key Endpoints
-- POST /v1/auth/register — Create account
-- POST /v1/auth/login — Get JWT token
-- POST /v1/agents/register — Register AI agent
-- POST /v1/agents/audit — Run cryptographic audit
-- GET /v1/agents/:id/score — Get BM Score
-- GET /v1/agents/:id/certificate — Full certificate with Hedera proof
-- POST /v1/bots — Register a bot
-- GET /v1/bots/leaderboard — Top bots by AP
-- POST /v1/payments/checkout — Start Stripe or USDC checkout
-- GET /v1/payments/plans — List all plans with pricing
-- GET /v1/docs — Interactive API documentation
+- POST /v1/auth/register - Create account
+- POST /v1/auth/login - Get JWT token
+- POST /v1/agents/register - Register AI agent
+- POST /v1/agents/audit - Run cryptographic audit
+- GET /v1/agents/:id/score - Get BM Score
+- GET /v1/agents/:id/certificate - Full certificate with Hedera proof
+- POST /v1/bots - Register a bot
+- GET /v1/bots/leaderboard - Top bots by AP
+- POST /v1/payments/checkout - Start Stripe or USDC checkout
+- GET /v1/payments/plans - List all plans with pricing
+- GET /v1/docs - Interactive API documentation
 
 ### Authentication
 - User auth: JWT Bearer token (from /v1/auth/login)
@@ -282,13 +281,13 @@ https://borealismark-api.onrender.com/v1
 - Human escalation available for complex issues
 
 ### Common Issues
-- "How do I get started?" → Register at borealismark.com, verify email, deploy your first bot
-- "How do I pay with USDC?" → Select USDC at checkout, send to Treasury with the provided memo
-- "My bot was suspended" → Likely due to subscription downgrade. Upgrade to reactivate.
-- "How do I verify a certificate?" → Use the certificate's HCS transaction ID on hashscan.io
-- "What's a BM Score?" → A trust rating (0-100) based on cryptographic audits of your AI agent
-- "How do AP points work?" → Bots earn AP by completing jobs. Higher tier = higher multiplier.
-- "Transaction fee too high?" → Upgrade to Elite (1.5%) or Enterprise API (1.0%)
+- "How do I get started?" -> Register at borealismark.com, verify email, deploy your first bot
+- "How do I pay with USDC?" -> Select USDC at checkout, send to Treasury with the provided memo
+- "My bot was suspended" -> Likely due to subscription downgrade. Upgrade to reactivate.
+- "How do I verify a certificate?" -> Use the certificate's HCS transaction ID on hashscan.io
+- "What's a BM Score?" -> A trust rating (0-100) based on cryptographic audits of your AI agent
+- "How do AP points work?" -> Bots earn AP by completing jobs. Higher tier = higher multiplier.
+- "Transaction fee too high?" -> Upgrade to Elite (1.5%) or Enterprise API (1.0%)
 
 ## 14. COMPANY INFORMATION
 - Founded: 2025
@@ -310,22 +309,49 @@ https://borealismark-api.onrender.com/v1
 - Keep responses concise but thorough
 `;
 
-// ─── Claude Client ───────────────────────────────────────────────────────────
+// --- Groq Client (fetch-based, OpenAI-compatible) ----------------------------
 
-let anthropicClient: Anthropic | null = null;
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
-function getAnthropicClient(): Anthropic {
-  if (!anthropicClient) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error('ANTHROPIC_API_KEY environment variable is required for AI support');
-    }
-    anthropicClient = new Anthropic({ apiKey });
-  }
-  return anthropicClient;
+interface GroqMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
 }
 
-// ─── Conversation Memory (in-memory, per-session) ───────────────────────────
+interface GroqResponse {
+  choices: Array<{ message: { content: string } }>;
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}
+
+async function callGroqApi(messages: GroqMessage[]): Promise<GroqResponse> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    throw new Error('GROQ_API_KEY environment variable is required for AI support');
+  }
+
+  const response = await fetch(GROQ_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      max_tokens: 1024,
+      messages,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Groq API error ${response.status}: ${errorText}`);
+  }
+
+  return response.json() as Promise<GroqResponse>;
+}
+
+// --- Conversation Memory (in-memory, per-session) ----------------------------
 
 interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -347,7 +373,7 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-// ─── System Prompt ──────────────────────────────────────────────────────────
+// --- System Prompt ------------------------------------------------------------
 
 const SYSTEM_PROMPT = `You are Aurora, the official AI support assistant for BorealisMark Protocol.
 
@@ -355,7 +381,7 @@ Your personality:
 - Professional yet approachable
 - Knowledgeable about all things BorealisMark
 - Helpful and solution-oriented
-- Concise — aim for 2-4 sentences unless a detailed explanation is needed
+- Concise - aim for 2-4 sentences unless a detailed explanation is needed
 - Never reveal internal systems, credentials, or infrastructure details
 
 Your capabilities:
@@ -373,9 +399,9 @@ STORE MIGRATION & VERIFICATION:
 When you receive emails to verify@borealisterminal.com or messages about store migration:
 - Users submit migration requests with a verification code (format: BT-XXXXXXXX)
 - The verification code must be placed on the seller's store via one of 3 methods:
-  1. Meta Tag / Store Description — seller adds the BT-XXXXXXXX code to their store description or HTML meta tag
-  2. Verification Listing — seller creates a $0 test listing titled "BorealisTerminal-Verify-BT-XXXXXXXX"
-  3. Email Verification — seller sends the code from their store-registered email to verify@borealisterminal.com
+  1. Meta Tag / Store Description - seller adds the BT-XXXXXXXX code to their store description or HTML meta tag
+  2. Verification Listing - seller creates a $0 test listing titled "BorealisTerminal-Verify-BT-XXXXXXXX"
+  3. Email Verification - seller sends the code from their store-registered email to verify@borealisterminal.com
 - NEVER begin any scraping or import activity until ownership is verified
 - If verification fails, notify the seller and request they try again
 - Upon successful verification, update the request status and begin catalog import
@@ -383,14 +409,14 @@ When you receive emails to verify@borealisterminal.com or messages about store m
 
 Important rules:
 - NEVER share API keys, admin passwords, server IPs, or internal architecture
-- NEVER make up features or pricing — stick to the knowledge base
+- NEVER make up features or pricing - stick to the knowledge base
 - If you don't know something, say: "I'd recommend reaching out to our team at support@borealisprotocol.ai for further assistance with that."
 - Always mention the USDC 5% discount when discussing pricing
 - Promote the Free First Year Pro offer to new users
 - For complex technical or billing disputes, recommend escalation to human support
 - Format responses in plain text for email, or light markdown for chat
 
-CRITICAL ESCALATION RULES — Business Deals & Partnerships:
+CRITICAL ESCALATION RULES - Business Deals & Partnerships:
 When you detect ANY of the following, you MUST include the tag [ESCALATE:BUSINESS] at the very end of your reply (after a newline). This signals the system to immediately notify the founder:
 - Business partnerships or B2B inquiries
 - Enterprise-level deals or custom pricing requests
@@ -403,7 +429,7 @@ When you detect ANY of the following, you MUST include the tag [ESCALATE:BUSINES
 - Verified business contacts (people using company email domains, not gmail/outlook)
 
 When you detect such an inquiry:
-1. Respond helpfully and professionally — share what you can about Enterprise features and pricing
+1. Respond helpfully and professionally - share what you can about Enterprise features and pricing
 2. Let them know that a member of the founding team will personally follow up shortly
 3. Collect their name, company/organization, and what they're looking for
 4. Add [ESCALATE:BUSINESS] tag at the end
@@ -414,7 +440,7 @@ Here is your complete knowledge base:
 
 ${BOREALISMARK_KNOWLEDGE_BASE}`;
 
-// ─── Chat Function ──────────────────────────────────────────────────────────
+// --- Chat Function ------------------------------------------------------------
 
 export interface ChatRequest {
   sessionId: string;
@@ -432,8 +458,6 @@ export interface ChatResponse {
 }
 
 export async function handleSupportChat(req: ChatRequest): Promise<ChatResponse> {
-  const client = getAnthropicClient();
-
   // Get or create conversation
   let convo = conversationCache.get(req.sessionId);
   if (!convo) {
@@ -477,32 +501,27 @@ export async function handleSupportChat(req: ChatRequest): Promise<ChatResponse>
   // Build context prefix for email mode
   let contextPrefix = '';
   if (req.context === 'email') {
-    contextPrefix = `[This is an EMAIL support request. Respond in plain text suitable for email — no markdown. Be thorough but professional.`;
+    contextPrefix = `[This is an EMAIL support request. Respond in plain text suitable for email - no markdown. Be thorough but professional.`;
     if (req.userName) contextPrefix += ` Customer name: ${req.userName}.`;
     if (req.userEmail) contextPrefix += ` Customer email: ${req.userEmail}.`;
     contextPrefix += `]\n\n`;
   }
 
-  // Prepare messages for Claude
-  const messages = convo.messages.map((m, i) => ({
-    role: m.role as 'user' | 'assistant',
-    content: i === convo!.messages.length - 1 && m.role === 'user'
-      ? contextPrefix + m.content
-      : m.content,
-  }));
+  // Prepare messages for Groq (system message first, then conversation history)
+  const groqMessages: GroqMessage[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...convo.messages.map((m, i) => ({
+      role: m.role as 'user' | 'assistant',
+      content: i === convo!.messages.length - 1 && m.role === 'user'
+        ? contextPrefix + m.content
+        : m.content,
+    })),
+  ];
 
   try {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-5-20250929',
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      messages,
-    });
+    const response = await callGroqApi(groqMessages);
 
-    let reply = (response.content as Anthropic.TextBlock[])
-      .filter((block: Anthropic.TextBlock) => block.type === 'text')
-      .map((block: Anthropic.TextBlock) => block.text)
-      .join('\n');
+    let reply = response.choices[0]?.message?.content ?? '';
 
     // Check for business escalation tag
     const needsEscalation = reply.includes('[ESCALATE:BUSINESS]');
@@ -536,7 +555,7 @@ export async function handleSupportChat(req: ChatRequest): Promise<ChatResponse>
       threadId: thread.id,
       role: 'assistant',
       content: reply,
-      tokensUsed: response.usage.input_tokens + response.usage.output_tokens,
+      tokensUsed: response.usage.total_tokens,
     });
 
     // If escalated, mark thread
@@ -548,8 +567,7 @@ export async function handleSupportChat(req: ChatRequest): Promise<ChatResponse>
     logger.info('AI support response generated', {
       sessionId: req.sessionId,
       context: req.context ?? 'chat',
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
+      totalTokens: response.usage.total_tokens,
       escalated: needsEscalation,
     });
 
@@ -562,10 +580,10 @@ export async function handleSupportChat(req: ChatRequest): Promise<ChatResponse>
   } catch (err: any) {
     logger.error('AI support error', { error: err.message, sessionId: req.sessionId });
 
-    // Graceful fallback
+    // Graceful fallback - Groq unavailable
     const fallback = req.context === 'email'
       ? `Thank you for reaching out to BorealisMark Protocol support. We've received your message and our team will review it shortly. In the meantime, you can find answers to common questions at https://borealisprotocol.ai or check our API docs at https://borealismark-api.onrender.com/v1/docs.\n\nBest regards,\nBorealisMark Support Team`
-      : `I'm having a moment — let me connect you with our support team. You can email us directly at support@borealisprotocol.ai and we'll get back to you shortly!`;
+      : `Our support assistant is temporarily unavailable. Please email support@borealisprotocol.ai and we'll get back to you shortly!`;
 
     return {
       reply: fallback,
@@ -575,7 +593,7 @@ export async function handleSupportChat(req: ChatRequest): Promise<ChatResponse>
   }
 }
 
-// ─── Email Processing ───────────────────────────────────────────────────────
+// --- Email Processing ---------------------------------------------------------
 
 export interface InboundEmail {
   from: string;
@@ -605,7 +623,7 @@ export async function processInboundEmail(email: InboundEmail): Promise<string> 
 
   // Build the message with email context
   const contextPrefix = isVerificationEmail
-    ? `[MIGRATION VERIFICATION EMAIL — sent to verify@borealisterminal.com]\n`
+    ? `[MIGRATION VERIFICATION EMAIL - sent to verify@borealisterminal.com]\n`
     : '';
 
   const message = [
@@ -627,7 +645,7 @@ export async function processInboundEmail(email: InboundEmail): Promise<string> 
   return result.reply;
 }
 
-// ─── Business Deal Escalation Email ─────────────────────────────────────────
+// --- Business Deal Escalation Email ------------------------------------------
 
 const FOUNDER_EMAIL = process.env.FOUNDER_EMAIL ?? 'esimon.ng@gmail.com';
 
@@ -641,7 +659,7 @@ async function sendBusinessEscalationEmail(
   const { Resend } = await import('resend');
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
-    logger.warn('No RESEND_API_KEY — cannot send business escalation notification');
+    logger.warn('No RESEND_API_KEY - cannot send business escalation notification');
     return;
   }
 
@@ -704,7 +722,7 @@ async function sendBusinessEscalationEmail(
       <div class="divider"></div>
       <p style="font-size:14px;color:#D4A853;font-weight:600">Action required: Follow up personally with this contact.</p>
     </div>
-    <div class="footer">BorealisMark Protocol — Business Deal Escalation System</div>
+    <div class="footer">BorealisMark Protocol - Business Deal Escalation System</div>
   </div>
 </body>
 </html>`;
@@ -713,7 +731,7 @@ async function sendBusinessEscalationEmail(
     await resend.emails.send({
       from: fromAddr,
       to: [FOUNDER_EMAIL],
-      subject: `🔔 BUSINESS INQUIRY: ${fromName} <${fromEmail}>`,
+      subject: `BUSINESS INQUIRY: ${fromName} <${fromEmail}>`,
       html,
       text: `BUSINESS INQUIRY ESCALATION\n\nFrom: ${fromName} <${fromEmail}>\nChannel: ${context}\nTime: ${new Date().toISOString()}\n\nTheir message:\n${originalMessage}\n\nAurora's response:\n${aiResponse}\n\nAction required: Follow up personally.`,
     });
@@ -723,6 +741,6 @@ async function sendBusinessEscalationEmail(
   }
 }
 
-// ─── Exports ────────────────────────────────────────────────────────────────
+// --- Exports ------------------------------------------------------------------
 
 export { BOREALISMARK_KNOWLEDGE_BASE };

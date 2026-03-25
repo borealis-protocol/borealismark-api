@@ -199,14 +199,14 @@ router.post('/email-inbound', async (req: Request, res: Response) => {
 // ─── GET /health — Support service health ───────────────────────────────────
 
 router.get('/health', (_req: Request, res: Response) => {
-  const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
+  const hasGroqKey = !!process.env.GROQ_API_KEY;
   const hasResendKey = !!process.env.RESEND_API_KEY;
 
   res.json({
     success: true,
     data: {
-      status: hasAnthropicKey ? 'operational' : 'degraded',
-      aiEnabled: hasAnthropicKey,
+      status: hasGroqKey ? 'operational' : 'degraded',
+      aiEnabled: hasGroqKey,
       emailEnabled: hasResendKey,
       agent: 'Aurora',
       version: '1.0.0',
