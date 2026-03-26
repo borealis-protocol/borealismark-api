@@ -45,6 +45,7 @@ import {
   computeAndStoreTrustScore,
 } from '../db/database';
 import { handleSupportChat } from '../services/aiSupport';
+import { sendAccountDeletionEmail } from '../services/email';
 import { uploadDatabaseBackup, isR2Enabled, getR2Status } from '../services/r2Storage';
 
 const router = Router();
@@ -239,6 +240,13 @@ router.delete('/users/:id', requireAuth, requireAdmin, (req: Request, res: Respo
       deletedUsername: user.name,
       deletions,
     });
+
+    // Fire-and-forget account deletion notification
+    if (user.email) {
+      sendAccountDeletionEmail(user.email, user.name ?? '').catch(
+        (e: Error) => logger.warn('Account deletion email failed', { error: e.message }),
+      );
+    }
 
     res.json({
       success: true,

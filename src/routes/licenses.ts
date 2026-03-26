@@ -39,7 +39,13 @@ import { getDb } from '../db/database';
 import { requireApiKey, requireScope } from '../middleware/auth';
 import { requireAuth, type AuthRequest, type JwtPayload } from './auth';
 import { auditLog, logger } from '../middleware/logger';
-import { sendBTSKeyEmail } from '../services/email';
+import {
+  sendBTSKeyEmail,
+  sendKeyRevocationEmail,
+  sendKeySuspensionEmail,
+  sendKeyRestorationEmail,
+  sendAdminFreeKeyNotification,
+} from '../services/email';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import type { Request, Response } from 'express';
 
@@ -395,6 +401,10 @@ router.post('/free', async (req: Request, res: Response) => {
       });
       return;
     }
+
+    // Admin notification (fire-and-forget)
+    sendAdminFreeKeyNotification(email, keyPrefix, licenseId)
+      .catch((e: Error) => logger.warn('Admin free key notification failed', { error: e.message }));
 
     res.status(201).json({
       success: true,
@@ -1385,6 +1395,22 @@ router.post('/:id/revoke', requireApiKey, requireScope('admin'), (req: Request, 
     const authReq = req as AuthenticatedRequest;
     auditLog('license.revoked', authReq.apiKey.id, { licenseId: id, reason, agentTerminated });
 
+    // Fire-and-forget revocation email
+    const revokedUser = db.prepare('SELECT name, email FROM users WHERE id = ?').get(license.user_id) as any;
+    const revokedAgent = license.agent_id
+      ? (db.prepare('SELECT name FROM agents WHERE id = ?').get(license.agent_id) as any)
+      : null;
+    if (revokedUser?.email) {
+      sendKeyRevocationEmail(
+        revokedUser.email,
+        revokedUser.name ?? '',
+        license.key_prefix,
+        revokedAgent?.name ?? null,
+        reason,
+        null,
+      ).catch((e: Error) => logger.warn('Revocation email failed', { error: e.message }));
+    }
+
     res.status(200).json({
       success: true,
       data: {
@@ -1457,6 +1483,21 @@ router.post('/:id/suspend', requireApiKey, requireScope('admin'), (req: Request,
 
     const authReq = req as AuthenticatedRequest;
     auditLog('license.suspended', authReq.apiKey.id, { licenseId: id, reason });
+
+    // Fire-and-forget suspension email
+    const suspendedUser = db.prepare('SELECT name, email FROM users WHERE id = ?').get(license.user_id) as any;
+    const suspendedAgent = license.agent_id
+      ? (db.prepare('SELECT name FROM agents WHERE id = ?').get(license.agent_id) as any)
+      : null;
+    if (suspendedUser?.email) {
+      sendKeySuspensionEmail(
+        suspendedUser.email,
+        suspendedUser.name ?? '',
+        license.key_prefix,
+        suspendedAgent?.name ?? null,
+        reason,
+      ).catch((e: Error) => logger.warn('Suspension email failed', { error: e.message }));
+    }
 
     res.status(200).json({
       success: true,
@@ -1531,6 +1572,20 @@ router.post('/:id/restore', requireApiKey, requireScope('admin'), (req: Request,
 
     const authReq = req as AuthenticatedRequest;
     auditLog('license.restored', authReq.apiKey.id, { licenseId: id, reason });
+
+    // Fire-and-forget restoration email
+    const restoredUser = db.prepare('SELECT name, email FROM users WHERE id = ?').get(license.user_id) as any;
+    const restoredAgent = license.agent_id
+      ? (db.prepare('SELECT name FROM agents WHERE id = ?').get(license.agent_id) as any)
+      : null;
+    if (restoredUser?.email) {
+      sendKeyRestorationEmail(
+        restoredUser.email,
+        restoredUser.name ?? '',
+        license.key_prefix,
+        restoredAgent?.name ?? null,
+      ).catch((e: Error) => logger.warn('Restoration email failed', { error: e.message }));
+    }
 
     res.status(200).json({
       success: true,

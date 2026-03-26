@@ -41,8 +41,8 @@ export async function sendPasswordResetEmail(
   resetToken: string,
   userName: string,
 ): Promise<boolean> {
-  const terminalUrl = (process.env.TERMINAL_URL ?? 'https://borealisterminal.com').replace(/\/$/, '');
-  const resetLink = `${terminalUrl}/?reset=${resetToken}`;
+  const frontendUrl = (process.env.FRONTEND_URL ?? 'https://borealisterminal.com').replace(/\/$/, '');
+  const resetLink = `${frontendUrl}/?reset=${resetToken}`;
 
   const html = `
 <!DOCTYPE html>
@@ -1073,6 +1073,10 @@ export async function sendOrderNotificationEmail(
       subject: `${titles[eventType] || 'Order Update'} - Borealis Terminal`,
       html,
       text,
+      headers: {
+        'List-Unsubscribe': '<mailto:unsubscribe@borealisprotocol.ai?subject=unsubscribe>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
     });
 
     if (result.error) {
@@ -1154,6 +1158,10 @@ export async function sendPaymentNotificationEmail(
       subject: `${titles[eventType]} - Borealis Terminal`,
       html,
       text,
+      headers: {
+        'List-Unsubscribe': '<mailto:unsubscribe@borealisprotocol.ai?subject=unsubscribe>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
     });
     if (result.error) { logger.error('Payment email failed', { error: result.error }); return false; }
     logger.info('Payment notification email sent', { to: toEmail, eventType });
@@ -1224,6 +1232,10 @@ export async function sendVerificationNotificationEmail(
       subject: 'Verification Complete - Borealis Terminal',
       html,
       text,
+      headers: {
+        'List-Unsubscribe': '<mailto:unsubscribe@borealisprotocol.ai?subject=unsubscribe>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
     });
     if (result.error) { logger.error('Verification email failed', { error: result.error }); return false; }
     logger.info('Verification notification email sent', { to: toEmail });
@@ -1531,6 +1543,500 @@ Only the key prefix (${keyPrefix}...) is visible in your dashboard.
     return true;
   } catch (err: any) {
     logger.error('BTS key email error', { error: err.message, to: toEmail, keyPrefix });
+    return false;
+  }
+}
+
+// ─── Shared Template Wrapper ──────────────────────────────────────────────────
+
+/**
+ * Wraps HTML body content with the standard Borealis dark email shell.
+ * Includes logo, footer links, and "Follow the North Star" tagline.
+ */
+export function emailTemplate(body: string, recipientEmail: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background-color:#0C0D10;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0C0D10;">
+    <tr>
+      <td align="center" style="padding:40px 20px;">
+        <table role="presentation" width="580" cellpadding="0" cellspacing="0" border="0" style="max-width:580px;width:100%;">
+          <tr>
+            <td align="center" style="background-color:#0F1014;border:1px solid #2A2B33;border-bottom:none;border-radius:12px 12px 0 0;padding:28px 40px 0 40px;">
+              <p style="font-size:11px;font-weight:700;letter-spacing:5px;color:#D4A853;text-transform:uppercase;margin:0 0 6px 0;">BOREALIS</p>
+              <p style="font-size:24px;font-weight:700;letter-spacing:-0.5px;color:#FFFFFF;margin:0 0 20px 0;">PROTOCOL</p>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="width:60px;height:2px;background-color:#D4A853;font-size:0;line-height:0;">&nbsp;</td></tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:28px 40px;">
+              ${body}
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#0F1014;border:1px solid #2A2B33;border-top:none;border-radius:0 0 12px 12px;padding:0 40px 28px 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="height:1px;background-color:#2A2B33;font-size:0;line-height:0;">&nbsp;</td></tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:28px 0 36px 0;">
+              <p style="font-size:13px;font-weight:600;color:#D4A853;letter-spacing:2.5px;text-transform:uppercase;margin:0 0 16px 0;">Follow the North Star</p>
+              <table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding:0 8px;"><a href="https://borealisprotocol.ai" style="font-size:12px;color:#888888;text-decoration:none;">Protocol</a></td>
+                  <td style="font-size:12px;color:#333333;">|</td>
+                  <td style="padding:0 8px;"><a href="https://borealismark.com" style="font-size:12px;color:#888888;text-decoration:none;">Mark</a></td>
+                  <td style="font-size:12px;color:#333333;">|</td>
+                  <td style="padding:0 8px;"><a href="https://borealisterminal.com" style="font-size:12px;color:#888888;text-decoration:none;">Terminal</a></td>
+                  <td style="font-size:12px;color:#333333;">|</td>
+                  <td style="padding:0 8px;"><a href="https://borealisacademy.com" style="font-size:12px;color:#888888;text-decoration:none;">Academy</a></td>
+                </tr>
+              </table>
+              <p style="font-size:11px;color:#444444;margin:16px 0 4px 0;">&copy; ${new Date().getFullYear()} Borealis Protocol Ltd</p>
+              <p style="font-size:11px;color:#333333;margin:0;">This email was sent to ${recipientEmail}.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+// ─── License Revocation Email ─────────────────────────────────────────────────
+
+/**
+ * Notify a user that their BTS License Key has been permanently revoked.
+ * Revocation terminates both the key AND the bound agent identity.
+ */
+export async function sendKeyRevocationEmail(
+  toEmail: string,
+  userName: string,
+  keyPrefix: string,
+  agentName: string | null,
+  reason: string,
+  hederaTxId?: string | null,
+): Promise<boolean> {
+  const last4 = keyPrefix.slice(-4);
+  const agentLine = agentName
+    ? `<p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">Bound Agent:</strong> ${agentName} (terminated)</p>`
+    : '';
+  const hederaLine = hederaTxId
+    ? `<p style="font-size:13px;color:#666;margin:12px 0 0 0;">Hedera record: <span style="font-family:'Courier New',Courier,monospace;color:#888;">${hederaTxId}</span></p>`
+    : '';
+
+  const body = `
+    <h1 style="font-size:22px;font-weight:700;color:#FFFFFF;margin:0 0 20px 0;">Your BTS License Key has been revoked</h1>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">Hi ${userName || 'there'},</p>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">Your BTS License Key ending in <strong style="color:#D4A853;">...${last4}</strong> has been permanently revoked, effective immediately.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0C0D10;border:1px solid #3A2020;border-radius:8px;margin-bottom:24px;">
+      <tr>
+        <td style="padding:20px 24px;">
+          <p style="font-size:12px;font-weight:700;color:#FF6B6B;text-transform:uppercase;letter-spacing:1px;margin:0 0 12px 0;">Revocation Details</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">Key:</strong> BTS-...${last4} (terminated)</p>
+          ${agentLine}
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">Reason:</strong> ${reason}</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><strong style="color:#CCC;">Effective:</strong> Immediately</p>
+        </td>
+      </tr>
+    </table>
+    <p style="font-size:14px;font-weight:700;color:#E0E0E0;margin:0 0 12px 0;">What this means</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 8px 0;">- Your agent identity on the Borealis trust network has been terminated.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 8px 0;">- All trust scoring for this key is permanently disabled.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 8px 0;">- The public Hedera record is preserved with full history - the revocation is immutable.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 24px 0;">- Your account and other licenses are unaffected.</p>
+    ${hederaLine}
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:24px 0 0 0;">If you believe this was done in error, contact us at <a href="mailto:support@borealisprotocol.ai" style="color:#D4A853;">support@borealisprotocol.ai</a>.</p>
+  `;
+
+  const html = emailTemplate(body, toEmail);
+  const text = `Your BTS License Key has been revoked\n\nHi ${userName || 'there'},\n\nYour BTS License Key ending in ...${last4} has been permanently revoked, effective immediately.\n\nReason: ${reason}\n${agentName ? `Bound agent: ${agentName} (terminated)\n` : ''}\nWhat this means:\n- Your agent identity on the Borealis trust network has been terminated.\n- All trust scoring for this key is permanently disabled.\n- The Hedera record is preserved with full history.\n- Your account and other licenses are unaffected.\n${hederaTxId ? `\nHedera record: ${hederaTxId}` : ''}\n\nIf you believe this was in error, contact support@borealisprotocol.ai\n\n- Borealis Protocol`;
+
+  if (!process.env.RESEND_API_KEY) {
+    logger.info('Key revocation email (NOT SENT — no RESEND_API_KEY)', { to: toEmail, keyPrefix });
+    return true;
+  }
+  try {
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [toEmail],
+      subject: `Your BTS License Key has been revoked - BTS-...${last4}`,
+      html,
+      text,
+    });
+    if (result.error) { logger.error('Key revocation email failed', { error: result.error, to: toEmail }); return false; }
+    logger.info('Key revocation email sent', { to: toEmail, keyPrefix });
+    return true;
+  } catch (err: any) {
+    logger.error('Key revocation email error', { error: err.message, to: toEmail });
+    return false;
+  }
+}
+
+// ─── License Suspension Email ─────────────────────────────────────────────────
+
+/**
+ * Notify a user that their BTS License Key has been temporarily suspended.
+ */
+export async function sendKeySuspensionEmail(
+  toEmail: string,
+  userName: string,
+  keyPrefix: string,
+  agentName: string | null,
+  reason: string,
+): Promise<boolean> {
+  const last4 = keyPrefix.slice(-4);
+  const agentLine = agentName
+    ? `<p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">Bound Agent:</strong> ${agentName}</p>`
+    : '';
+
+  const body = `
+    <h1 style="font-size:22px;font-weight:700;color:#FFFFFF;margin:0 0 20px 0;">Your BTS License Key has been suspended</h1>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">Hi ${userName || 'there'},</p>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">Your BTS License Key ending in <strong style="color:#D4A853;">...${last4}</strong> has been temporarily suspended.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0C0D10;border:1px solid #3A3010;border-radius:8px;margin-bottom:24px;">
+      <tr>
+        <td style="padding:20px 24px;">
+          <p style="font-size:12px;font-weight:700;color:#FFA500;text-transform:uppercase;letter-spacing:1px;margin:0 0 12px 0;">Suspension Details</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">Key:</strong> BTS-...${last4} (suspended)</p>
+          ${agentLine}
+          <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><strong style="color:#CCC;">Reason:</strong> ${reason}</p>
+        </td>
+      </tr>
+    </table>
+    <p style="font-size:14px;font-weight:700;color:#E0E0E0;margin:0 0 12px 0;">What is affected</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 8px 0;">- Trust scoring is paused - no new BTS scores will be computed.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 8px 0;">- Telemetry submissions are blocked for this key.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 8px 0;">- Public verification will show "suspended" status.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 24px 0;">- This is temporary. Your key can be restored once the issue is resolved.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0;">To resolve this suspension, contact us at <a href="mailto:support@borealisprotocol.ai" style="color:#D4A853;">support@borealisprotocol.ai</a>.</p>
+  `;
+
+  const html = emailTemplate(body, toEmail);
+  const text = `Your BTS License Key has been suspended\n\nHi ${userName || 'there'},\n\nYour BTS License Key ending in ...${last4} has been temporarily suspended.\n\nReason: ${reason}\n${agentName ? `Bound agent: ${agentName}\n` : ''}\nWhat is affected:\n- Trust scoring is paused.\n- Telemetry submissions are blocked.\n- Public verification shows "suspended" status.\n- This is temporary and can be resolved.\n\nContact support@borealisprotocol.ai to resolve this.\n\n- Borealis Protocol`;
+
+  if (!process.env.RESEND_API_KEY) {
+    logger.info('Key suspension email (NOT SENT — no RESEND_API_KEY)', { to: toEmail, keyPrefix });
+    return true;
+  }
+  try {
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [toEmail],
+      subject: `Your BTS License Key has been suspended - BTS-...${last4}`,
+      html,
+      text,
+    });
+    if (result.error) { logger.error('Key suspension email failed', { error: result.error, to: toEmail }); return false; }
+    logger.info('Key suspension email sent', { to: toEmail, keyPrefix });
+    return true;
+  } catch (err: any) {
+    logger.error('Key suspension email error', { error: err.message, to: toEmail });
+    return false;
+  }
+}
+
+// ─── License Restoration Email ────────────────────────────────────────────────
+
+/**
+ * Notify a user that their BTS License Key has been restored from suspension.
+ */
+export async function sendKeyRestorationEmail(
+  toEmail: string,
+  userName: string,
+  keyPrefix: string,
+  agentName: string | null,
+): Promise<boolean> {
+  const last4 = keyPrefix.slice(-4);
+  const agentLine = agentName
+    ? `<p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">Agent:</strong> ${agentName} (scoring resumed)</p>`
+    : '';
+  const dashboardUrl = `${process.env.FRONTEND_URL ?? 'https://borealismark.com'}/dashboard.html`;
+
+  const body = `
+    <h1 style="font-size:22px;font-weight:700;color:#4CAF50;margin:0 0 20px 0;">Your BTS License Key has been restored</h1>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">Hi ${userName || 'there'},</p>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">Good news - your BTS License Key ending in <strong style="color:#D4A853;">...${last4}</strong> has been restored and is fully active again.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0C0D10;border:1px solid #1A3A1A;border-radius:8px;margin-bottom:24px;">
+      <tr>
+        <td style="padding:20px 24px;">
+          <p style="font-size:12px;font-weight:700;color:#4CAF50;text-transform:uppercase;letter-spacing:1px;margin:0 0 12px 0;">Restoration Status</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">Key:</strong> BTS-...${last4} (active)</p>
+          ${agentLine}
+          <p style="font-size:14px;color:#4CAF50;margin:0;line-height:1.6;font-weight:700;">Status: Active - trust scoring resumed</p>
+        </td>
+      </tr>
+    </table>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 8px 0;">Your agent is back online. Telemetry submissions are accepted and trust scoring is active.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 24px 0;">Welcome back to the Borealis trust network.</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+      <tr><td><a href="${dashboardUrl}" style="display:inline-block;background-color:#D4A853;color:#0C0D10;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">Go to Dashboard</a></td></tr>
+    </table>
+  `;
+
+  const html = emailTemplate(body, toEmail);
+  const text = `Your BTS License Key has been restored\n\nHi ${userName || 'there'},\n\nYour BTS License Key ending in ...${last4} has been restored and is fully active.\n\n- Trust scoring has resumed.\n- Telemetry submissions are accepted.\n- Your agent is back online.\n\nWelcome back to the Borealis trust network.\n\nDashboard: ${dashboardUrl}\n\n- Borealis Protocol`;
+
+  if (!process.env.RESEND_API_KEY) {
+    logger.info('Key restoration email (NOT SENT — no RESEND_API_KEY)', { to: toEmail, keyPrefix });
+    return true;
+  }
+  try {
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [toEmail],
+      subject: `Your BTS License Key has been restored - BTS-...${last4}`,
+      html,
+      text,
+    });
+    if (result.error) { logger.error('Key restoration email failed', { error: result.error, to: toEmail }); return false; }
+    logger.info('Key restoration email sent', { to: toEmail, keyPrefix });
+    return true;
+  } catch (err: any) {
+    logger.error('Key restoration email error', { error: err.message, to: toEmail });
+    return false;
+  }
+}
+
+// ─── Account Deletion Email ───────────────────────────────────────────────────
+
+/**
+ * Notify a user that their Borealis Protocol account has been deleted.
+ */
+export async function sendAccountDeletionEmail(
+  toEmail: string,
+  userName: string,
+): Promise<boolean> {
+  const body = `
+    <h1 style="font-size:22px;font-weight:700;color:#FFFFFF;margin:0 0 20px 0;">Your Borealis Protocol account has been deleted</h1>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">Hi ${userName || 'there'},</p>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">Your Borealis Protocol account associated with <strong style="color:#CCC;">${toEmail}</strong> has been permanently deleted.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0C0D10;border:1px solid #2A2B33;border-radius:8px;margin-bottom:16px;">
+      <tr>
+        <td style="padding:20px 24px;">
+          <p style="font-size:12px;font-weight:700;color:#D4A853;text-transform:uppercase;letter-spacing:1px;margin:0 0 12px 0;">What was deleted</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;">- Account profile and login credentials</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;">- Associated BTS License Keys (keys revoked, agent identities terminated)</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;">- Marketplace listings and order history</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;">- Bot configurations and progression data</p>
+        </td>
+      </tr>
+    </table>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0C0D10;border:1px solid #2A2B33;border-radius:8px;margin-bottom:24px;">
+      <tr>
+        <td style="padding:20px 24px;">
+          <p style="font-size:12px;font-weight:700;color:#D4A853;text-transform:uppercase;letter-spacing:1px;margin:0 0 12px 0;">Data Retention</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.7;">Hedera blockchain records (audit certificates, trust score anchors) are immutable and cannot be deleted by design. These records contain no personally identifiable information. All other personal data is removed within 30 days.</p>
+        </td>
+      </tr>
+    </table>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0;">If this deletion was made in error or you did not request it, contact us immediately at <a href="mailto:support@borealisprotocol.ai" style="color:#D4A853;">support@borealisprotocol.ai</a>.</p>
+  `;
+
+  const html = emailTemplate(body, toEmail);
+  const text = `Your Borealis Protocol account has been deleted\n\nHi ${userName || 'there'},\n\nYour Borealis Protocol account (${toEmail}) has been permanently deleted.\n\nWhat was deleted:\n- Account profile and login credentials\n- Associated BTS License Keys\n- Marketplace listings and order history\n- Bot configurations and progression data\n\nData retention: Hedera blockchain records are immutable and cannot be deleted. All personal data is removed within 30 days.\n\nIf this was made in error, contact support@borealisprotocol.ai immediately.\n\n- Borealis Protocol`;
+
+  if (!process.env.RESEND_API_KEY) {
+    logger.info('Account deletion email (NOT SENT — no RESEND_API_KEY)', { to: toEmail });
+    return true;
+  }
+  try {
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [toEmail],
+      subject: 'Your Borealis Protocol account has been deleted',
+      html,
+      text,
+    });
+    if (result.error) { logger.error('Account deletion email failed', { error: result.error, to: toEmail }); return false; }
+    logger.info('Account deletion email sent', { to: toEmail });
+    return true;
+  } catch (err: any) {
+    logger.error('Account deletion email error', { error: err.message, to: toEmail });
+    return false;
+  }
+}
+
+// ─── Audit Verdict Email ──────────────────────────────────────────────────────
+
+/**
+ * Notify an agent owner of their MAGISTRATE audit verdict.
+ * APPROVED = certification granted with BTS score + credit rating.
+ * REJECTED = certification not granted with specific failure details.
+ */
+export async function sendAuditVerdictEmail(
+  toEmail: string,
+  userName: string,
+  agentName: string,
+  verdict: 'APPROVED' | 'REJECTED',
+  scoreTotal: number,
+  creditRating: string,
+  certificateId?: string | null,
+  hederaTxId?: string | null,
+  discrepancies?: string[],
+): Promise<boolean> {
+  const btsScore = Math.round(scoreTotal / 10);
+  const dashboardUrl = `${process.env.FRONTEND_URL ?? 'https://borealismark.com'}/dashboard.html`;
+  const ratingColor = verdict === 'APPROVED' ? '#4CAF50' : '#FFA500';
+
+  const approvedBody = `
+    <h1 style="font-size:22px;font-weight:700;color:#4CAF50;margin:0 0 8px 0;">Your agent has been certified</h1>
+    <p style="font-size:14px;color:#888;margin:0 0 24px 0;">MAGISTRATE audit verdict: APPROVED</p>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">Hi ${userName || 'there'},</p>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 24px 0;"><strong style="color:#CCC;">${agentName}</strong> has passed the Borealis audit and received its BTS trust certification.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#070809;border:2px solid #D4A853;border-radius:10px;margin-bottom:24px;">
+      <tr>
+        <td align="center" style="padding:28px 24px;">
+          <p style="font-size:11px;font-weight:700;color:#888;letter-spacing:2px;text-transform:uppercase;margin:0 0 12px 0;">BTS TRUST SCORE</p>
+          <p style="font-size:48px;font-weight:700;color:#D4A853;margin:0 0 8px 0;line-height:1;">${btsScore}</p>
+          <p style="font-size:20px;font-weight:700;color:${ratingColor};margin:0 0 4px 0;">${creditRating}</p>
+          <p style="font-size:12px;color:#555;margin:0;">out of 100</p>
+        </td>
+      </tr>
+    </table>
+    ${certificateId ? `<p style="font-size:13px;color:#666;margin:0 0 8px 0;">Certificate ID: <span style="font-family:'Courier New',Courier,monospace;color:#888;">${certificateId}</span></p>` : ''}
+    ${hederaTxId ? `<p style="font-size:13px;color:#666;margin:0 0 24px 0;">Hedera anchor: <span style="font-family:'Courier New',Courier,monospace;color:#888;">${hederaTxId}</span></p>` : '<p style="margin:0 0 24px 0;"></p>'}
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 8px 0;">Your agent's trust score and credit rating are now live on the Borealis public registry, anchored to Hedera Hashgraph - tamper-proof and permanently verifiable.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 24px 0;">Continue submitting telemetry via <span style="font-family:'Courier New',monospace;font-size:12px;color:#D4A853;">/v1/licenses/telemetry</span> to keep your score current.</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+      <tr><td><a href="${dashboardUrl}" style="display:inline-block;background-color:#D4A853;color:#0C0D10;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">View Certificate</a></td></tr>
+    </table>
+  `;
+
+  const discrepanciesList = (discrepancies ?? []).length > 0
+    ? (discrepancies ?? []).map(d => `<p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;">- ${d}</p>`).join('')
+    : '<p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;">See your submission details for a full breakdown.</p>';
+
+  const rejectedBody = `
+    <h1 style="font-size:22px;font-weight:700;color:#FFA500;margin:0 0 8px 0;">Certification not granted</h1>
+    <p style="font-size:14px;color:#888;margin:0 0 24px 0;">MAGISTRATE audit verdict: REJECTED</p>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">Hi ${userName || 'there'},</p>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 24px 0;">The Borealis MAGISTRATE has reviewed the audit submission for <strong style="color:#CCC;">${agentName}</strong> and the certification request was not approved at this time.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0C0D10;border:1px solid #3A3010;border-radius:8px;margin-bottom:24px;">
+      <tr>
+        <td style="padding:20px 24px;">
+          <p style="font-size:12px;font-weight:700;color:#FFA500;text-transform:uppercase;letter-spacing:1px;margin:0 0 12px 0;">Score at time of review</p>
+          <p style="font-size:28px;font-weight:700;color:#FFA500;margin:0 0 4px 0;">${btsScore} / 100</p>
+          <p style="font-size:14px;color:#888;margin:0;">Rating: ${creditRating}</p>
+        </td>
+      </tr>
+    </table>
+    <p style="font-size:14px;font-weight:700;color:#E0E0E0;margin:0 0 12px 0;">Issues identified</p>
+    ${discrepanciesList}
+    <p style="font-size:14px;font-weight:700;color:#E0E0E0;margin:24px 0 12px 0;">How to resubmit</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 8px 0;">1. Address the issues above in your agent's behavioral configuration.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 8px 0;">2. Submit fresh telemetry via <span style="font-family:'Courier New',monospace;font-size:12px;color:#D4A853;">/v1/licenses/telemetry</span> to update your score.</p>
+    <p style="font-size:14px;color:#A0A0A0;line-height:1.7;margin:0 0 24px 0;">3. Once your BTS score improves, resubmit the audit via ARBITER.</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+      <tr><td><a href="${dashboardUrl}" style="display:inline-block;background-color:#D4A853;color:#0C0D10;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">View Dashboard</a></td></tr>
+    </table>
+  `;
+
+  const html = emailTemplate(verdict === 'APPROVED' ? approvedBody : rejectedBody, toEmail);
+
+  const approvedText = `Your agent has been certified - BTS Score ${btsScore} / ${creditRating}\n\nHi ${userName || 'there'},\n\n${agentName} has passed the Borealis audit and received its BTS trust certification.\n\nBTS Score: ${btsScore} / 100\nCredit Rating: ${creditRating}\n${certificateId ? `Certificate ID: ${certificateId}\n` : ''}${hederaTxId ? `Hedera anchor: ${hederaTxId}\n` : ''}\nYour score is live on the Borealis public registry.\n\nDashboard: ${dashboardUrl}\n\n- Borealis Protocol`;
+
+  const rejectedText = `Certification not granted for ${agentName}\n\nHi ${userName || 'there'},\n\nThe MAGISTRATE audit verdict for ${agentName} was: REJECTED.\n\nScore at time of review: ${btsScore} / 100 (${creditRating})\n\n${(discrepancies ?? []).length > 0 ? `Issues identified:\n${(discrepancies ?? []).map(d => `- ${d}`).join('\n')}\n\n` : ''}To resubmit: address issues, submit fresh telemetry, then resubmit via ARBITER.\n\nDashboard: ${dashboardUrl}\n\n- Borealis Protocol`;
+
+  if (!process.env.RESEND_API_KEY) {
+    logger.info('Audit verdict email (NOT SENT — no RESEND_API_KEY)', { to: toEmail, verdict, agentName });
+    return true;
+  }
+  try {
+    const subject = verdict === 'APPROVED'
+      ? `Your agent is certified - ${agentName} scored ${btsScore} (${creditRating})`
+      : `Certification not granted - ${agentName}`;
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [toEmail],
+      subject,
+      html,
+      text: verdict === 'APPROVED' ? approvedText : rejectedText,
+    });
+    if (result.error) { logger.error('Audit verdict email failed', { error: result.error, to: toEmail, verdict }); return false; }
+    logger.info('Audit verdict email sent', { to: toEmail, verdict, agentName });
+    return true;
+  } catch (err: any) {
+    logger.error('Audit verdict email error', { error: err.message, to: toEmail, verdict });
+    return false;
+  }
+}
+
+// ─── Admin: Free Key Claimed Notification ────────────────────────────────────
+
+/**
+ * Notify the platform admin when a free BTS License Key is claimed.
+ */
+export async function sendAdminFreeKeyNotification(
+  userEmail: string,
+  keyPrefix: string,
+  keyId: string,
+): Promise<boolean> {
+  const timestamp = new Date().toLocaleString('en-US', { timeZone: 'America/Toronto' });
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0C0D10; color: #E0E0E0; }
+    .container { max-width: 560px; margin: 40px auto; padding: 0 20px; }
+    .card { background: #16171C; border: 1px solid #2A2B33; border-radius: 12px; padding: 32px; }
+    .logo { color: #D4A853; font-size: 20px; font-weight: 700; margin-bottom: 20px; }
+    h1 { font-size: 20px; font-weight: 600; color: #4CAF50; margin: 0 0 16px 0; }
+    p { font-size: 15px; line-height: 1.6; color: #A0A0A0; margin: 0 0 12px 0; }
+    .detail { font-size: 14px; color: #888; margin: 6px 0; }
+    .detail strong { color: #CCC; }
+    .divider { border-top: 1px solid #2A2B33; margin: 20px 0; }
+    .footer { text-align: center; padding: 20px 0; font-size: 12px; color: #555; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="logo">BorealisMark Admin</div>
+      <h1>Free Key Claimed</h1>
+      <p>A new free-tier BTS License Key has been issued.</p>
+      <div class="divider"></div>
+      <p class="detail"><strong>User Email:</strong> ${userEmail}</p>
+      <p class="detail"><strong>Key Prefix:</strong> <span style="font-family:monospace;color:#D4A853;">${keyPrefix}...</span></p>
+      <p class="detail"><strong>Key ID:</strong> <span style="font-family:monospace;font-size:12px;">${keyId}</span></p>
+      <p class="detail"><strong>Tier:</strong> Free (BTS score cap: 65)</p>
+      <p class="detail"><strong>Claimed:</strong> ${timestamp}</p>
+    </div>
+    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol - Admin Notification</div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Free Key Claimed\n\nUser: ${userEmail}\nKey Prefix: ${keyPrefix}...\nKey ID: ${keyId}\nTier: Free (score cap 65)\nClaimed: ${timestamp}`;
+
+  if (!process.env.RESEND_API_KEY) {
+    logger.info('Admin free key notification (NOT SENT — no RESEND_API_KEY)', { userEmail, keyPrefix });
+    return true;
+  }
+  try {
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [ADMIN_EMAIL],
+      subject: `Free Key Claimed: ${userEmail}`,
+      html,
+      text,
+    });
+    if (result.error) { logger.error('Admin free key notification failed', { error: result.error }); return false; }
+    logger.info('Admin free key notification sent', { to: ADMIN_EMAIL, userEmail });
+    return true;
+  } catch (err: any) {
+    logger.error('Admin free key notification error', { error: err.message });
     return false;
   }
 }

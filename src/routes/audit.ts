@@ -25,6 +25,7 @@ import { AuditTrailService } from '../services/auditTrail';
 import { events as eventBus, emit as emitEvent } from '../services/eventBus';
 import { getDb } from '../db/database';
 import { logger } from '../middleware/logger';
+import { sendAuditVerdictEmail } from '../services/email';
 import type { AuditInput } from '../engine/types';
 
 const router = Router();
@@ -182,6 +183,25 @@ router.post(
           creditRating: certificate.creditRating,
         });
 
+        // Fire-and-forget certification email to agent owner
+        const db = getDb();
+        const certOwner = db.prepare(
+          'SELECT u.email, u.name, a.name as agent_name FROM agents a JOIN users u ON a.owner_id = u.id WHERE a.id = ?',
+        ).get(certificate.agentId) as any;
+        if (certOwner?.email) {
+          sendAuditVerdictEmail(
+            certOwner.email,
+            certOwner.name ?? '',
+            certOwner.agent_name ?? certificate.agentId,
+            'APPROVED',
+            certificate.score.total,
+            certificate.creditRating,
+            certificate.certificateId,
+            null,
+            [],
+          ).catch((e: Error) => logger.warn('Audit verdict email failed', { error: e.message }));
+        }
+
         res.status(201).json({
           success: true,
           data: {
@@ -202,6 +222,28 @@ router.post(
 
       // REJECTED or ESCALATED
       logger.info('Audit verdict recorded', { verdictId, submissionId, verdict });
+
+      // Fire-and-forget rejection email (only for REJECTED, not ESCALATED)
+      if (verdict === 'REJECTED') {
+        const db = getDb();
+        const rawInput = JSON.parse(submission.raw_input) as AuditInput;
+        const rejOwner = db.prepare(
+          'SELECT u.email, u.name, a.name as agent_name FROM agents a JOIN users u ON a.owner_id = u.id WHERE a.id = ?',
+        ).get(rawInput.agentId) as any;
+        if (rejOwner?.email) {
+          sendAuditVerdictEmail(
+            rejOwner.email,
+            rejOwner.name ?? '',
+            rejOwner.agent_name ?? rawInput.agentId,
+            'REJECTED',
+            0,
+            'UNRATED',
+            null,
+            null,
+            (discrepancies ?? []).map(String),
+          ).catch((e: Error) => logger.warn('Audit rejection email failed', { error: e.message }));
+        }
+      }
 
       res.status(200).json({
         success: true,
