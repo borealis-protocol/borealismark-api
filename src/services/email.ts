@@ -2,7 +2,7 @@
  * BorealisMark — Email Service
  *
  * Sends transactional emails via Resend (https://resend.com).
- * Uses support@borealismark.com as the sender.
+ * Uses support@borealisprotocol.ai as the sender.
  *
  * Required env var: RESEND_API_KEY
  */
@@ -11,8 +11,8 @@ import { Resend } from 'resend';
 import { logger } from '../middleware/logger';
 
 // CRITICAL: Use verified custom domain for outbound email — NEVER *.cloudflare.dev or *.workers.dev
-const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'BorealisMark <support@borealismark.com>';
-const VERIFY_FROM_ADDRESS = process.env.VERIFY_EMAIL_FROM ?? 'Borealis Terminal Verification <verify@borealismark.com>';
+const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'BorealisMark <support@borealisprotocol.ai>';
+const VERIFY_FROM_ADDRESS = process.env.VERIFY_EMAIL_FROM ?? 'Borealis Terminal Verification <verify@borealisprotocol.ai>';
 
 // Safety: validate FROM address at startup — block .dev domains
 if (FROM_ADDRESS.includes('.workers.dev') || FROM_ADDRESS.includes('.pages.dev') || FROM_ADDRESS.includes('cloudflare.dev')) {

@@ -10,8 +10,8 @@ import { logger } from '../middleware/logger';
 
 const router = Router();
 
-const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'Borealis Terminal <support@borealismark.com>';
-const NOTIFY_ADDRESS = 'support@borealismark.com';
+const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'Borealis Terminal <support@borealisprotocol.ai>';
+const NOTIFY_ADDRESS = 'support@borealisprotocol.ai';
 
 // ─── Rate limiting (simple in-memory) ────────────────────────────────────────
 
@@ -141,7 +141,7 @@ router.post('/', async (req: Request, res: Response) => {
     logger.error('Contact form error', { error: err });
     return res.status(500).json({
       success: false,
-      error: 'Something went wrong. Please email us directly at support@borealismark.com',
+      error: 'Something went wrong. Please email us directly at support@borealisprotocol.ai',
     });
   }
 });

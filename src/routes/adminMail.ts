@@ -130,7 +130,7 @@ function initMailSchema(): void {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 // CRITICAL: Outbound emails MUST use verified branded domains — NEVER *.cloudflare.dev or *.workers.dev
-const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'BorealisMark <support@borealismark.com>';
+const FROM_ADDRESS = process.env.EMAIL_FROM ?? 'BorealisMark <support@borealisprotocol.ai>';
 const ADMIN_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL ?? 'esimon.ng@gmail.com';
 
 // Safety check on FROM address

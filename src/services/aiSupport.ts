@@ -276,7 +276,7 @@ https://borealismark-api.onrender.com/v1
 ## 13. SUPPORT INFORMATION
 
 ### Contact
-- Email: support@borealismark.com
+- Email: support@borealisprotocol.ai
 - Response time: AI-assisted responses within minutes
 - Human escalation available for complex issues
 
@@ -410,7 +410,7 @@ When you receive emails to verify@borealisterminal.com or messages about store m
 Important rules:
 - NEVER share API keys, admin passwords, server IPs, or internal architecture
 - NEVER make up features or pricing - stick to the knowledge base
-- If you don't know something, say: "I'd recommend reaching out to our team at support@borealismark.com for further assistance with that."
+- If you don't know something, say: "I'd recommend reaching out to our team at support@borealisprotocol.ai for further assistance with that."
 - Always mention the USDC 5% discount when discussing pricing
 - Promote the Free First Year Pro offer to new users
 - For complex technical or billing disputes, recommend escalation to human support
@@ -583,7 +583,7 @@ export async function handleSupportChat(req: ChatRequest): Promise<ChatResponse>
     // Graceful fallback - Groq unavailable
     const fallback = req.context === 'email'
       ? `Thank you for reaching out to BorealisMark Protocol support. We've received your message and our team will review it shortly. In the meantime, you can find answers to common questions at https://borealismark.com or check our API docs at https://borealismark-api.onrender.com/v1/docs.\n\nBest regards,\nBorealisMark Support Team`
-      : `Our support assistant is temporarily unavailable. Please email support@borealismark.com and we'll get back to you shortly!`;
+      : `Our support assistant is temporarily unavailable. Please email support@borealisprotocol.ai and we'll get back to you shortly!`;
 
     return {
       reply: fallback,
@@ -665,9 +665,9 @@ async function sendBusinessEscalationEmail(
 
   const resend = new Resend(apiKey);
   // CRITICAL: Never send from .workers.dev or .pages.dev domains
-  let fromAddr = process.env.EMAIL_FROM ?? 'BorealisMark <support@borealismark.com>';
+  let fromAddr = process.env.EMAIL_FROM ?? 'BorealisMark <support@borealisprotocol.ai>';
   if (fromAddr.includes('.workers.dev') || fromAddr.includes('.pages.dev') || fromAddr.includes('cloudflare.dev')) {
-    fromAddr = 'BorealisMark <support@borealismark.com>';
+    fromAddr = 'BorealisMark <support@borealisprotocol.ai>';
   }
 
   const html = `<!DOCTYPE html>

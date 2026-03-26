@@ -393,10 +393,10 @@ router.post('/support/:id/reply', requireAuth, requireAdmin, async (req: Request
         if (apiKey) {
           const resend = new Resend(apiKey);
           await resend.emails.send({
-            from: process.env.EMAIL_FROM ?? 'BorealisMark Support <support@borealismark.com>',
+            from: process.env.EMAIL_FROM ?? 'BorealisMark Support <support@borealisprotocol.ai>',
             to: [thread.customer_email],
             subject: thread.subject ? `Re: ${thread.subject}` : 'BorealisMark Support Follow-up',
-            text: `Hi ${thread.customer_name || 'there'},\n\n${message}\n\n---\nBorealisMark Support Team\nsupport@borealismark.com`,
+            text: `Hi ${thread.customer_name || 'there'},\n\n${message}\n\n---\nBorealisMark Support Team\nsupport@borealisprotocol.ai`,
           });
           logger.info('Admin email reply sent', { threadId: req.params.id, to: thread.customer_email });
         }
