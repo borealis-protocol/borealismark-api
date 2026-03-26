@@ -1249,77 +1249,233 @@ export async function sendBTSKeyEmail(
 
   const html = `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: #0C0D10; color: #E0E0E0; }
-    .container { max-width: 580px; margin: 40px auto; padding: 0 20px; }
-    .card { background: #16171C; border: 1px solid #2A2B33; border-radius: 12px; padding: 40px 32px; }
-    .logo { color: #D4A853; font-size: 20px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 24px; }
-    h1 { font-size: 22px; font-weight: 600; color: #FFFFFF; margin: 0 0 8px 0; }
-    .subtitle { font-size: 14px; color: #888; margin: 0 0 24px 0; }
-    p { font-size: 15px; line-height: 1.6; color: #A0A0A0; margin: 0 0 16px 0; }
-    .key-block { background: #0C0D10; border: 2px solid #D4A853; border-radius: 10px; padding: 24px; margin: 24px 0; text-align: center; }
-    .key-label { font-size: 11px; font-weight: 700; color: #888; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 12px; }
-    .key-value { font-family: 'Courier New', Courier, monospace; font-size: 22px; font-weight: 700; color: #D4A853; letter-spacing: 3px; word-break: break-all; }
-    .warning-box { background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; padding: 16px 20px; margin: 20px 0; }
-    .warning-title { font-size: 13px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-    .warning-text { font-size: 13px; color: #fca5a5; line-height: 1.6; margin: 0; }
-    .steps { background: #1A1B22; border-radius: 8px; padding: 20px 24px; margin: 20px 0; }
-    .steps-title { font-size: 13px; font-weight: 700; color: #D4A853; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
-    .step { display: flex; align-items: flex-start; margin-bottom: 12px; font-size: 13px; color: #A0A0A0; line-height: 1.5; }
-    .step-num { background: #D4A853; color: #0C0D10; font-weight: 700; font-size: 11px; border-radius: 50%; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-right: 10px; margin-top: 1px; }
-    code { background: #0C0D10; padding: 1px 6px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; color: #D4A853; }
-    .btn { display: inline-block; background: #D4A853; color: #0C0D10; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 15px; margin: 8px 0 4px 0; }
-    .divider { border-top: 1px solid #2A2B33; margin: 24px 0; }
-    .small { font-size: 12px; color: #555; line-height: 1.6; }
-    .footer { text-align: center; padding: 24px 0; font-size: 12px; color: #444; }
-  </style>
+  <title>Your BTS License Key - Borealis Protocol</title>
 </head>
-<body>
-  <div class="container">
-    <div class="card">
-      <div class="logo">BorealisMark</div>
-      <h1>Your BTS License Key</h1>
-      <p class="subtitle">Merlin AI Trust Scoring - Order Confirmation</p>
+<body style="margin:0;padding:0;background-color:#0C0D10;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
 
-      <p>Hi ${userName || 'there'},</p>
-      <p>Your purchase is confirmed. Below is your BTS License Key. This key is shown <strong style="color:#fff">exactly once</strong> - save it now.</p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0C0D10;">
+    <tr>
+      <td align="center" style="padding:40px 20px;">
 
-      <div class="key-block">
-        <div class="key-label">BTS License Key - ${keyPrefix}...</div>
-        <div class="key-value">${btsKey}</div>
-      </div>
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
 
-      <div class="warning-box">
-        <div class="warning-title">⚠ Permanent Binding Warning</div>
-        <p class="warning-text">
-          When you activate this key, it binds <strong>permanently</strong> to one AI agent. This binding cannot be reversed or transferred.
-          If you later need a new key, <strong>both this key and its bound agent will be permanently terminated</strong> - all trust scores for that agent will be marked as terminated on the public record.
-          <strong>Choose your agent carefully before activating.</strong>
-        </p>
-      </div>
+          <!-- HEADER -->
+          <tr>
+            <td align="center" style="background-color:#0F1014;border:1px solid #2A2B33;border-bottom:none;border-radius:12px 12px 0 0;padding:36px 40px 0 40px;">
+              <p style="font-size:11px;font-weight:700;letter-spacing:5px;color:#D4A853;text-transform:uppercase;margin:0 0 6px 0;">BOREALIS</p>
+              <p style="font-size:26px;font-weight:700;letter-spacing:-0.5px;color:#FFFFFF;margin:0 0 24px 0;">PROTOCOL</p>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="width:60px;height:2px;background-color:#D4A853;font-size:0;line-height:0;">&nbsp;</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
 
-      <div class="steps">
-        <div class="steps-title">Activation Steps</div>
-        <div class="step"><span class="step-num">1</span>Log in to your BorealisMark dashboard and navigate to <strong style="color:#fff">My Licenses</strong>.</div>
-        <div class="step"><span class="step-num">2</span>Click <strong style="color:#fff">Activate Key</strong> and enter your key or use the API endpoint <code>POST /v1/licenses/activate</code>.</div>
-        <div class="step"><span class="step-num">3</span>Select an existing agent or register a new one - this binds the key permanently.</div>
-        <div class="step"><span class="step-num">4</span>Integrate via the <code>@borealis/merlin-sdk</code> (coming soon) or call <code>/v1/licenses/verify</code> directly to submit telemetry and generate BTS scores.</div>
-      </div>
+          <!-- WELCOME -->
+          <tr>
+            <td align="center" style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:28px 40px 24px 40px;">
+              <h1 style="font-size:22px;font-weight:700;color:#FFFFFF;margin:0 0 8px 0;letter-spacing:-0.3px;">Welcome to the Borealis Trust Network</h1>
+              <p style="font-size:14px;color:#888888;margin:0;">Your Merlin Agent Runtime purchase is confirmed</p>
+            </td>
+          </tr>
 
-      <a href="${dashboardUrl}" class="btn">Go to Dashboard</a>
+          <!-- DIVIDER -->
+          <tr>
+            <td style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="height:1px;background-color:#2A2B33;font-size:0;line-height:0;">&nbsp;</td></tr>
+              </table>
+            </td>
+          </tr>
 
-      <div class="divider"></div>
-      <p class="small">Save this email. Your raw BTS key will <strong>never be shown again</strong> - only the key prefix (<code>${keyPrefix}...</code>) is visible in your dashboard for identification. If you lose this key before activating it, contact support to have it replaced (the old key will be permanently terminated).</p>
-    </div>
-    <div class="footer">
-      &copy; ${new Date().getFullYear()} BorealisMark Protocol - AI Trust Certification<br>
-      <span style="color:#333">This email was sent to ${toEmail} because you purchased a Merlin BTS License Key.</span>
-    </div>
-  </div>
+          <!-- GREETING -->
+          <tr>
+            <td style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:28px 40px 24px 40px;">
+              <p style="font-size:16px;color:#E0E0E0;margin:0 0 12px 0;">Hi ${userName || 'there'},</p>
+              <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0;">Your BTS License Key is ready. This key is the identity credential for your AI agent on the Borealis trust network. It is shown <strong style="color:#FFFFFF;">exactly once</strong> - save it now.</p>
+            </td>
+          </tr>
+
+          <!-- KEY CARD -->
+          <tr>
+            <td style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px 32px 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#070809;border:2px solid #D4A853;border-radius:10px;">
+                <tr>
+                  <td align="center" style="padding:32px 24px 20px 24px;">
+                    <p style="font-size:22px;margin:0 0 16px 0;">&#128273;</p>
+                    <p style="font-size:11px;font-weight:700;color:#888888;letter-spacing:2px;text-transform:uppercase;margin:0 0 18px 0;">BTS LICENSE KEY &nbsp;-&nbsp; ${keyPrefix}...</p>
+                    <p style="font-family:'Courier New',Courier,monospace;font-size:20px;font-weight:700;color:#D4A853;letter-spacing:3px;word-break:break-all;margin:0;line-height:1.6;">${btsKey}</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="border-top:1px solid #1F1A0F;padding:12px 24px;">
+                    <p style="font-size:11px;color:#4A4030;letter-spacing:1px;text-transform:uppercase;margin:0;">1 KEY &nbsp;-&nbsp; 1 AGENT &nbsp;-&nbsp; PERMANENT BINDING</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- BINDING NOTICE -->
+          <tr>
+            <td style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px 32px 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#141108;border:1px solid #3A2E10;border-radius:8px;">
+                <tr>
+                  <td style="padding:20px 24px;">
+                    <p style="font-size:12px;font-weight:700;color:#D4A853;text-transform:uppercase;letter-spacing:1px;margin:0 0 10px 0;">Important - Permanent Binding</p>
+                    <p style="font-size:13px;color:#B89A50;line-height:1.7;margin:0;">When you activate this key, it binds <strong style="color:#D4A853;">permanently</strong> to one AI agent. This binding cannot be reversed or transferred. If you later need a new key, both this key and its bound agent will be permanently terminated - all trust scores for that agent will be marked as terminated on the public record. <strong style="color:#D4A853;">Choose your agent carefully before activating.</strong></p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- ACTIVATION STEPS -->
+          <tr>
+            <td style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px 32px 40px;">
+              <p style="font-size:12px;font-weight:700;color:#D4A853;text-transform:uppercase;letter-spacing:1.5px;margin:0 0 22px 0;">Activation Steps</p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px;">
+                <tr>
+                  <td width="34" valign="top" style="padding-top:2px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr><td align="center" width="24" height="24" style="background-color:#D4A853;border-radius:12px;font-size:11px;font-weight:700;color:#0C0D10;line-height:24px;">1</td></tr>
+                    </table>
+                  </td>
+                  <td style="padding-left:6px;">
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;">Log in to your BorealisMark dashboard and navigate to <strong style="color:#FFFFFF;">My Licenses</strong>.</p>
+                  </td>
+                </tr>
+              </table>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px;">
+                <tr>
+                  <td width="34" valign="top" style="padding-top:2px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr><td align="center" width="24" height="24" style="background-color:#D4A853;border-radius:12px;font-size:11px;font-weight:700;color:#0C0D10;line-height:24px;">2</td></tr>
+                    </table>
+                  </td>
+                  <td style="padding-left:6px;">
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;">Click <strong style="color:#FFFFFF;">Activate Key</strong>, enter your key, or call <span style="font-family:'Courier New',Courier,monospace;font-size:12px;background-color:#070809;color:#D4A853;padding:2px 6px;border-radius:3px;">POST /v1/licenses/activate</span> directly.</p>
+                  </td>
+                </tr>
+              </table>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px;">
+                <tr>
+                  <td width="34" valign="top" style="padding-top:2px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr><td align="center" width="24" height="24" style="background-color:#D4A853;border-radius:12px;font-size:11px;font-weight:700;color:#0C0D10;line-height:24px;">3</td></tr>
+                    </table>
+                  </td>
+                  <td style="padding-left:6px;">
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;">Select an existing agent or register a new one. This step permanently binds the key - it cannot be undone.</p>
+                  </td>
+                </tr>
+              </table>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td width="34" valign="top" style="padding-top:2px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr><td align="center" width="24" height="24" style="background-color:#D4A853;border-radius:12px;font-size:11px;font-weight:700;color:#0C0D10;line-height:24px;">4</td></tr>
+                    </table>
+                  </td>
+                  <td style="padding-left:6px;">
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;">Integrate via <span style="font-family:'Courier New',Courier,monospace;font-size:12px;background-color:#070809;color:#D4A853;padding:2px 6px;border-radius:3px;">@borealis/merlin-sdk</span> or call <span style="font-family:'Courier New',Courier,monospace;font-size:12px;background-color:#070809;color:#D4A853;padding:2px 6px;border-radius:3px;">/v1/licenses/telemetry</span> to submit behavioral data and earn your BTS trust score.</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- WHAT YOUR KEY UNLOCKS -->
+          <tr>
+            <td style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px 32px 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="height:1px;background-color:#2A2B33;font-size:0;line-height:0;margin-bottom:28px;">&nbsp;</td></tr>
+              </table>
+              <p style="font-size:12px;font-weight:700;color:#D4A853;text-transform:uppercase;letter-spacing:1.5px;margin:20px 0 18px 0;">What Your Key Unlocks</p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding-bottom:10px;">
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><span style="color:#D4A853;">&#9658;&nbsp;</span>5-factor BM Trust Score anchored to Hedera Hashgraph</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding-bottom:10px;">
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><span style="color:#D4A853;">&#9658;&nbsp;</span>Public credit rating: AAA+ down to FLAGGED</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding-bottom:10px;">
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><span style="color:#D4A853;">&#9658;&nbsp;</span>Immutable audit trail on-chain - tamper-proof by design</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><span style="color:#D4A853;">&#9658;&nbsp;</span>Verifiable identity on the Borealis public registry</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- CTA -->
+          <tr>
+            <td align="center" style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px 32px 40px;">
+              <a href="${dashboardUrl}" style="display:inline-block;background-color:#D4A853;color:#0C0D10;padding:14px 44px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px;letter-spacing:0.3px;">Go to Dashboard</a>
+            </td>
+          </tr>
+
+          <!-- KEY RECOVERY NOTICE -->
+          <tr>
+            <td style="background-color:#0F1014;border:1px solid #2A2B33;border-top:none;border-radius:0 0 12px 12px;padding:0 40px 32px 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="height:1px;background-color:#2A2B33;font-size:0;line-height:0;">&nbsp;</td></tr>
+              </table>
+              <p style="font-size:12px;color:#555555;line-height:1.8;margin:20px 0 0 0;">Save this email. Your raw BTS key will <strong style="color:#888888;">never be shown again</strong> - only the prefix (<span style="font-family:'Courier New',Courier,monospace;font-size:11px;background-color:#070809;color:#D4A853;padding:1px 5px;border-radius:3px;">${keyPrefix}...</span>) appears in your dashboard. If you lose this key before activating it, contact support to have it replaced - the original key will be permanently terminated.</p>
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td align="center" style="padding:32px 0 40px 0;">
+              <p style="font-size:13px;font-weight:600;color:#D4A853;letter-spacing:2.5px;text-transform:uppercase;margin:0 0 18px 0;">Follow the North Star</p>
+              <table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding:0 10px;">
+                    <a href="https://borealisprotocol.ai" style="font-size:12px;color:#888888;text-decoration:none;">Protocol</a>
+                  </td>
+                  <td style="font-size:12px;color:#333333;">|</td>
+                  <td style="padding:0 10px;">
+                    <a href="https://borealismark.com" style="font-size:12px;color:#888888;text-decoration:none;">Mark</a>
+                  </td>
+                  <td style="font-size:12px;color:#333333;">|</td>
+                  <td style="padding:0 10px;">
+                    <a href="https://borealisterminal.com" style="font-size:12px;color:#888888;text-decoration:none;">Terminal</a>
+                  </td>
+                  <td style="font-size:12px;color:#333333;">|</td>
+                  <td style="padding:0 10px;">
+                    <a href="https://borealisacademy.com" style="font-size:12px;color:#888888;text-decoration:none;">Academy</a>
+                  </td>
+                </tr>
+              </table>
+              <p style="font-size:11px;color:#444444;margin:18px 0 6px 0;">&copy; ${new Date().getFullYear()} Borealis Protocol Ltd</p>
+              <p style="font-size:11px;color:#333333;margin:0;">This email was sent to ${toEmail} because you purchased a Merlin BTS License Key.</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
 </body>
 </html>`;
 
