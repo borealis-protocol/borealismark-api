@@ -130,6 +130,7 @@ router.get('/users/:id', requireAuth, requireAdmin, (req: Request, res: Response
 // ─── PATCH /users/:id — Update User ────────────────────────────────────────
 
 const updateUserSchema = z.object({
+  name: z.string().min(1).max(100).trim().optional(),
   tier: z.enum(['standard', 'pro', 'elite']).optional(),
   role: z.enum(['user', 'admin']).optional(),
   active: z.boolean().optional(),
@@ -148,8 +149,9 @@ router.patch('/users/:id', requireAuth, requireAdmin, (req: Request, res: Respon
     }
 
     const adminId = (req as any).user.sub;
-    const { tier, role, active } = parsed.data;
+    const { name, tier, role, active } = parsed.data;
 
+    if (name) getDb().prepare('UPDATE users SET name = ? WHERE id = ?').run(name, req.params.id);
     if (tier) updateUserTier(req.params.id, tier);
     if (role) updateUserRole(req.params.id, role);
     if (active !== undefined) {
