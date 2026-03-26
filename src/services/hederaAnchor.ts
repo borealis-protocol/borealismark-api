@@ -208,11 +208,29 @@ function computeMerkleRoot(events: Record<string, any>[]): string {
 
 // ─── Anchor Batch ─────────────────────────────────────────────────────────────
 
+// Re-entrancy guard for anchorEventBatch(). If this flag is already set when
+// the function is entered, emit() was called inside an anchoring operation,
+// recreating the HCS loop that caused the March 2026 wallet drain.
+// emit() is intentionally not imported in this module (see NOTE at line 39),
+// but this guard catches any future regression where that import is added.
+let _anchoringInProgress = false;
+
 export async function anchorEventBatch(): Promise<{
   anchored: number;
   merkleRoot: string | null;
   hcsTxId: string | null;
 }> {
+  // Invariant: anchorEventBatch() must never be called re-entrantly. If this
+  // fires, the event bus was triggered inside an anchoring call - abort to
+  // prevent a runaway HCS transaction loop draining the gas wallet.
+  if (_anchoringInProgress) {
+    logger.error('INVARIANT VIOLATION: anchorEventBatch() re-entered - aborting to prevent HCS loop', {
+      cause: 'emit() must not be called inside anchorEventBatch() or its callees',
+    });
+    return { anchored: 0, merkleRoot: null, hcsTxId: null };
+  }
+  _anchoringInProgress = true;
+  try {
   // Safety guard 1: daily cap
   if (isDailyCapExceeded()) {
     return { anchored: 0, merkleRoot: null, hcsTxId: null };
@@ -329,6 +347,9 @@ export async function anchorEventBatch(): Promise<{
     }
 
     return { anchored: 0, merkleRoot, hcsTxId: null };
+  }
+  } finally {
+    _anchoringInProgress = false;
   }
 }
 
