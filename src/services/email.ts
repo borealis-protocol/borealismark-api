@@ -136,8 +136,8 @@ export async function sendVerificationEmail(
   verificationToken: string,
   userName: string,
 ): Promise<boolean> {
-  const frontendUrl = process.env.FRONTEND_URL ?? 'https://borealisterminal.com';
-  const verifyLink = `${frontendUrl}?verify=${verificationToken}`;
+  const frontendUrl = (process.env.FRONTEND_URL ?? 'https://borealismark.com').replace(/\/$/, '');
+  const verifyLink = `${frontendUrl}/dashboard.html?verify=${verificationToken}`;
 
   const html = `
 <!DOCTYPE html>
