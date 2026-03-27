@@ -26,6 +26,7 @@ import {
   createAuditRequest,
   getAuditRequest,
   updateAuditRequestStatus,
+  getUserById,
 } from '../db/database';
 import { runAudit } from '../engine/audit-engine';
 import { createHederaClient, submitCertificateToHCS, createAuditTopic } from '../hedera/hcs';
@@ -463,6 +464,88 @@ router.post('/my/register', requireAuth, (req, res) => {
     });
   } catch (err) {
     logger.error('Dashboard register agent error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Failed to register agent', timestamp: Date.now() });
+  }
+});
+
+// ─── POST /v1/agents/me — User agent registration (JWT, slot-limit enforced) ──
+// This is the Merlin customer path: logged-in user creates an agent to bind
+// their BTS key to. Enforces tier-based slot caps: standard=3, pro=10, elite=20.
+const MeRegisterSchema = z.object({
+  name: z.string().min(2).max(100),
+  description: z.string().max(500).optional().default(''),
+  capabilities: z.array(z.string()).optional(),
+});
+
+const TIER_SLOT_CAPS: Record<string, number> = {
+  standard: 3,
+  pro: 10,
+  elite: 20,
+};
+
+router.post('/me', requireAuth, async (req, res) => {
+  const authUser = (req as AuthRequest).user!;
+  try {
+    const parsed = MeRegisterSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        details: parsed.error.flatten().fieldErrors,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    // Look up user to get their tier
+    const dbUser = getUserById(authUser.sub);
+    if (!dbUser) {
+      res.status(401).json({ success: false, error: 'User not found', timestamp: Date.now() });
+      return;
+    }
+
+    const tier = (dbUser as any).tier ?? 'standard';
+    const slotCap = TIER_SLOT_CAPS[tier] ?? TIER_SLOT_CAPS.standard;
+
+    // Count active agents already owned by this user
+    const existingAgents = getAgentsByUserId(authUser.sub);
+    const activeCount = existingAgents.filter((a: any) => a.active !== 0).length;
+
+    if (activeCount >= slotCap) {
+      res.status(403).json({
+        success: false,
+        error: 'AGENT_SLOT_LIMIT_REACHED',
+        message: `Your ${tier} plan allows a maximum of ${slotCap} agent slot${slotCap === 1 ? '' : 's'}. You currently have ${activeCount}. Upgrade your plan to add more agents.`,
+        data: { currentCount: activeCount, slotCap, tier },
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const { name, description } = parsed.data;
+    const id = `agent_${uuidv4().replace(/-/g, '').slice(0, 20)}`;
+
+    registerAgent(id, name, description ?? '', '1.0.0', 'dashboard', authUser.sub, 'other');
+
+    emit.agentRegistered({ agentId: id, name, version: '1.0.0' });
+
+    logger.info('User agent registered via /me', { agentId: id, userId: authUser.sub, tier, slotsUsed: activeCount + 1, slotCap });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        agentId: id,
+        name,
+        description: description ?? '',
+        registeredAt: Date.now(),
+        slotsUsed: activeCount + 1,
+        slotCap,
+        tier,
+      },
+      timestamp: Date.now(),
+    });
+  } catch (err) {
+    logger.error('POST /agents/me error', { error: String(err), userId: authUser.sub });
     res.status(500).json({ success: false, error: 'Failed to register agent', timestamp: Date.now() });
   }
 });

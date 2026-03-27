@@ -298,7 +298,7 @@ const FreeKeySchema = z.object({
 // Key is delivered by email. Account auto-created if email is new.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.post('/free', async (req: Request, res: Response) => {
+router.post('/free', publicBtsLimiter, async (req: Request, res: Response) => {
   try {
     const parsed = FreeKeySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -378,10 +378,9 @@ router.post('/free', async (req: Request, res: Response) => {
 
     if (!delivered) {
       // Key was created but email failed — log internally for support retrieval, never expose in response
-      logger.warn('BTS free key email delivery failed — key logged for support retrieval', {
+      logger.warn('BTS free key email delivery failed — contact support with licenseId to retrieve key', {
         licenseId,
         keyPrefix,
-        rawKey,
         email,
         userId: user.id,
       });

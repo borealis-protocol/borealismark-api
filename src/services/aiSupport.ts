@@ -164,7 +164,7 @@ All plans can be paid with USDC on Hedera for a 5% discount:
 ### How It Works
 1. Certified sellers list products/services
 2. Buyers browse and purchase with USDC
-3. Payment goes to escrow (BorealisMark Treasury: 0.0.10382966)
+3. Payment goes to escrow (BorealisMark Treasury: 0.0.10357023)
 4. Seller deposits a 25% trust bond
 5. After buyer confirms delivery, escrow releases funds
 6. Both parties get rated
@@ -211,7 +211,7 @@ Anyone can verify a BorealisMark certificate by:
 ### Payment Flow
 1. User selects USDC at checkout
 2. System generates an invoice with amount + memo
-3. User sends USDC to Treasury (0.0.10382966) with the memo
+3. User sends USDC to Treasury (0.0.10357023) with the memo
 4. System verifies payment via Hedera Mirror Node
 5. Subscription/purchase is activated
 
