@@ -41,8 +41,8 @@ export async function sendPasswordResetEmail(
   resetToken: string,
   userName: string,
 ): Promise<boolean> {
-  const frontendUrl = (process.env.FRONTEND_URL ?? 'https://borealisterminal.com').replace(/\/$/, '');
-  const resetLink = `${frontendUrl}/?reset=${resetToken}`;
+  const frontendUrl = (process.env.FRONTEND_URL ?? 'https://borealismark.com').replace(/\/$/, '');
+  const resetLink = `${frontendUrl}/dashboard.html?reset=${resetToken}`;
 
   const html = `
 <!DOCTYPE html>
@@ -1983,40 +1983,24 @@ export async function sendAdminFreeKeyNotification(
 ): Promise<boolean> {
   const timestamp = new Date().toLocaleString('en-US', { timeZone: 'America/Toronto' });
 
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0C0D10; color: #E0E0E0; }
-    .container { max-width: 560px; margin: 40px auto; padding: 0 20px; }
-    .card { background: #16171C; border: 1px solid #2A2B33; border-radius: 12px; padding: 32px; }
-    .logo { color: #D4A853; font-size: 20px; font-weight: 700; margin-bottom: 20px; }
-    h1 { font-size: 20px; font-weight: 600; color: #4CAF50; margin: 0 0 16px 0; }
-    p { font-size: 15px; line-height: 1.6; color: #A0A0A0; margin: 0 0 12px 0; }
-    .detail { font-size: 14px; color: #888; margin: 6px 0; }
-    .detail strong { color: #CCC; }
-    .divider { border-top: 1px solid #2A2B33; margin: 20px 0; }
-    .footer { text-align: center; padding: 20px 0; font-size: 12px; color: #555; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="card">
-      <div class="logo">BorealisMark Admin</div>
-      <h1>Free Key Claimed</h1>
-      <p>A new free-tier BTS License Key has been issued.</p>
-      <div class="divider"></div>
-      <p class="detail"><strong>User Email:</strong> ${userEmail}</p>
-      <p class="detail"><strong>Key Prefix:</strong> <span style="font-family:monospace;color:#D4A853;">${keyPrefix}...</span></p>
-      <p class="detail"><strong>Key ID:</strong> <span style="font-family:monospace;font-size:12px;">${keyId}</span></p>
-      <p class="detail"><strong>Tier:</strong> Free (BTS score cap: 65)</p>
-      <p class="detail"><strong>Claimed:</strong> ${timestamp}</p>
-    </div>
-    <div class="footer">&copy; ${new Date().getFullYear()} The Borealis Protocol - Admin Notification</div>
-  </div>
-</body>
-</html>`;
+  const body = `
+    <h1 style="font-size:22px;font-weight:700;color:#4CAF50;margin:0 0 20px 0;">Free Key Claimed</h1>
+    <p style="font-size:15px;line-height:1.7;color:#A0A0A0;margin:0 0 20px 0;">A new free-tier BTS License Key has been issued.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0C0D10;border:1px solid #2A2B33;border-radius:8px;margin-bottom:20px;">
+      <tr>
+        <td style="padding:20px 24px;">
+          <p style="font-size:12px;font-weight:700;color:#4CAF50;text-transform:uppercase;letter-spacing:1px;margin:0 0 12px 0;">Key Details</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">User Email:</strong> ${userEmail}</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">Key Prefix:</strong> <span style="font-family:'Courier New',Courier,monospace;color:#D4A853;">${keyPrefix}...</span></p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">Key ID:</strong> <span style="font-family:'Courier New',Courier,monospace;font-size:12px;">${keyId}</span></p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0 0 8px 0;line-height:1.6;"><strong style="color:#CCC;">Tier:</strong> Free (BTS score cap: 65)</p>
+          <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><strong style="color:#CCC;">Claimed:</strong> ${timestamp}</p>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  const html = emailTemplate(body, ADMIN_EMAIL);
 
   const text = `Free Key Claimed\n\nUser: ${userEmail}\nKey Prefix: ${keyPrefix}...\nKey ID: ${keyId}\nTier: Free (score cap 65)\nClaimed: ${timestamp}`;
 
