@@ -1347,10 +1347,10 @@ export async function sendBTSKeyEmail(
             </td>
           </tr>
 
-          <!-- ACTIVATION STEPS -->
+          <!-- WHAT'S NEXT -->
           <tr>
             <td style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px 32px 40px;">
-              <p style="font-size:12px;font-weight:700;color:#D4A853;text-transform:uppercase;letter-spacing:1.5px;margin:0 0 22px 0;">Activation Steps</p>
+              <p style="font-size:12px;font-weight:700;color:#D4A853;text-transform:uppercase;letter-spacing:1.5px;margin:0 0 22px 0;">What's Next - 4 Steps to Your Trust Score</p>
 
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px;">
                 <tr>
@@ -1360,7 +1360,7 @@ export async function sendBTSKeyEmail(
                     </table>
                   </td>
                   <td style="padding-left:6px;">
-                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;">Log in to your BorealisMark dashboard and navigate to <strong style="color:#FFFFFF;">My Licenses</strong>.</p>
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><strong style="color:#FFFFFF;">Save this key now.</strong> It is shown exactly once in this email. Only the prefix appears in your dashboard. If you lose it before activation, contact support for a replacement.</p>
                   </td>
                 </tr>
               </table>
@@ -1373,7 +1373,7 @@ export async function sendBTSKeyEmail(
                     </table>
                   </td>
                   <td style="padding-left:6px;">
-                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;">Click <strong style="color:#FFFFFF;">Activate Key</strong>, enter your key, or call <span style="font-family:'Courier New',Courier,monospace;font-size:12px;background-color:#070809;color:#D4A853;padding:2px 6px;border-radius:3px;">POST /v1/licenses/activate</span> directly.</p>
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><strong style="color:#FFFFFF;">Register your agent</strong> in <a href="${dashboardUrl}#licenses" style="color:#D4A853;text-decoration:none;">My Licenses</a>. Create a profile for the AI agent that will use this key - name and description only.</p>
                   </td>
                 </tr>
               </table>
@@ -1386,7 +1386,7 @@ export async function sendBTSKeyEmail(
                     </table>
                   </td>
                   <td style="padding-left:6px;">
-                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;">Select an existing agent or register a new one. This step permanently binds the key - it cannot be undone.</p>
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><strong style="color:#FFFFFF;">Bind your key</strong> - click Activate in My Licenses and follow the wizard. This permanently pairs the key with your agent. Choose carefully - this step cannot be reversed.</p>
                   </td>
                 </tr>
               </table>
@@ -1399,7 +1399,43 @@ export async function sendBTSKeyEmail(
                     </table>
                   </td>
                   <td style="padding-left:6px;">
-                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;">Integrate via <span style="font-family:'Courier New',Courier,monospace;font-size:12px;background-color:#070809;color:#D4A853;padding:2px 6px;border-radius:3px;">@borealis/merlin-sdk</span> or call <span style="font-family:'Courier New',Courier,monospace;font-size:12px;background-color:#070809;color:#D4A853;padding:2px 6px;border-radius:3px;">/v1/licenses/telemetry</span> to submit behavioral data and earn your BTS trust score.</p>
+                    <p style="font-size:14px;color:#C0C0C0;margin:0;line-height:1.6;"><strong style="color:#FFFFFF;">Submit telemetry</strong> via <span style="font-family:'Courier New',Courier,monospace;font-size:12px;background-color:#070809;color:#D4A853;padding:2px 6px;border-radius:3px;">@borealis/merlin-sdk</span> or <span style="font-family:'Courier New',Courier,monospace;font-size:12px;background-color:#070809;color:#D4A853;padding:2px 6px;border-radius:3px;">POST /v1/licenses/telemetry</span> to generate your BTS trust score, anchored to Hedera Hashgraph.</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- GETTING STARTED RESOURCES -->
+          <tr>
+            <td style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px 28px 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">
+                <tr><td style="height:1px;background-color:#1A1B22;font-size:0;line-height:0;">&nbsp;</td></tr>
+              </table>
+              <p style="font-size:12px;font-weight:700;color:#D4A853;text-transform:uppercase;letter-spacing:1.5px;margin:0 0 14px 0;">Getting Started</p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding-bottom:8px;">
+                    <p style="font-size:13px;color:#A0A0A0;margin:0;line-height:1.6;">
+                      <span style="color:#D4A853;">&#8227;&nbsp;</span>
+                      <a href="https://borealisacademy.com/hub/how-bm-score-works.html" style="color:#8888AA;text-decoration:none;">How BTS Score Works</a> - understand what goes into your trust rating
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding-bottom:8px;">
+                    <p style="font-size:13px;color:#A0A0A0;margin:0;line-height:1.6;">
+                      <span style="color:#D4A853;">&#8227;&nbsp;</span>
+                      <a href="https://borealisacademy.com/simulator.html" style="color:#8888AA;text-decoration:none;">Score Simulator</a> - preview what your score might look like
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <p style="font-size:13px;color:#A0A0A0;margin:0;line-height:1.6;">
+                      <span style="color:#D4A853;">&#8227;&nbsp;</span>
+                      The onboarding wizard in your <a href="${dashboardUrl}#licenses" style="color:#8888AA;text-decoration:none;">dashboard</a> walks you through every step
+                    </p>
                   </td>
                 </tr>
               </table>
@@ -1440,8 +1476,23 @@ export async function sendBTSKeyEmail(
 
           <!-- CTA -->
           <tr>
-            <td align="center" style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px 32px 40px;">
-              <a href="${dashboardUrl}" style="display:inline-block;background-color:#D4A853;color:#0C0D10;padding:14px 44px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px;letter-spacing:0.3px;">Go to Dashboard</a>
+            <td align="center" style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px 28px 40px;">
+              <a href="${dashboardUrl}#licenses" style="display:inline-block;background-color:#D4A853;color:#0C0D10;padding:14px 44px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px;letter-spacing:0.3px;">Open My Licenses</a>
+            </td>
+          </tr>
+
+          <!-- SUPPORT -->
+          <tr>
+            <td style="background-color:#0F1014;border-left:1px solid #2A2B33;border-right:1px solid #2A2B33;padding:0 40px 28px 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0A0B0E;border:1px solid #1E1F26;border-radius:8px;">
+                <tr>
+                  <td style="padding:16px 20px;">
+                    <p style="font-size:11px;font-weight:700;color:#D4A853;text-transform:uppercase;letter-spacing:1px;margin:0 0 6px 0;">Support</p>
+                    <p style="font-size:13px;color:#888888;margin:0;line-height:1.6;">Questions about your key, activation, or scoring? We respond to all support requests.</p>
+                    <p style="font-size:13px;margin:8px 0 0 0;"><a href="mailto:support@borealisprotocol.ai" style="color:#D4A853;text-decoration:none;font-weight:600;">support@borealisprotocol.ai</a></p>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
 
@@ -1451,7 +1502,7 @@ export async function sendBTSKeyEmail(
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr><td style="height:1px;background-color:#2A2B33;font-size:0;line-height:0;">&nbsp;</td></tr>
               </table>
-              <p style="font-size:12px;color:#555555;line-height:1.8;margin:20px 0 0 0;">Save this email. Your raw BTS key will <strong style="color:#888888;">never be shown again</strong> - only the prefix (<span style="font-family:'Courier New',Courier,monospace;font-size:11px;background-color:#070809;color:#D4A853;padding:1px 5px;border-radius:3px;">${keyPrefix}...</span>) appears in your dashboard. If you lose this key before activating it, contact support to have it replaced - the original key will be permanently terminated.</p>
+              <p style="font-size:12px;color:#555555;line-height:1.8;margin:20px 0 0 0;">Save this email. Your raw BTS key will <strong style="color:#888888;">never be shown again</strong> - only the prefix (<span style="font-family:'Courier New',Courier,monospace;font-size:11px;background-color:#070809;color:#D4A853;padding:1px 5px;border-radius:3px;">${keyPrefix}...</span>) appears in your dashboard. If you lose this key before activating it, contact <a href="mailto:support@borealisprotocol.ai" style="color:#666666;text-decoration:none;">support@borealisprotocol.ai</a> - the original key will be permanently terminated and replaced.</p>
             </td>
           </tr>
 
@@ -1491,13 +1542,13 @@ export async function sendBTSKeyEmail(
 </body>
 </html>`;
 
-  const text = `Your BTS License Key - BorealisMark
+  const text = `Your BTS License Key - Borealis Protocol
 
 Hi ${userName || 'there'},
 
-Your Merlin BTS License Key purchase is confirmed.
+Your Merlin BTS License Key purchase is confirmed. Your key is below - save it now.
 
-YOUR KEY (save this - shown ONCE):
+YOUR KEY (shown ONCE - save immediately):
 ${btsKey}
 
 ⚠ PERMANENT BINDING WARNING:
@@ -1505,16 +1556,23 @@ When you activate this key, it binds permanently to one AI agent. This cannot be
 If you need a new key later, both this key AND its bound agent will be permanently terminated.
 Choose your agent carefully before activating.
 
-ACTIVATION STEPS:
-1. Log in to your dashboard at ${dashboardUrl}
-2. Go to "My Licenses" and activate your key (or use POST /v1/licenses/activate)
-3. Select or register the agent you want to bind permanently
-4. Integrate via @borealis/merlin-sdk or call /v1/licenses/verify directly for trust scoring
+WHAT'S NEXT - 4 STEPS TO YOUR TRUST SCORE:
+1. Save this key now - it is shown exactly once.
+2. Register your agent at ${dashboardUrl}#licenses - create a profile for the AI agent.
+3. Bind your key - click Activate in My Licenses and follow the wizard. Permanent and irreversible.
+4. Submit telemetry via @borealis/merlin-sdk or POST /v1/licenses/telemetry to generate your BTS score.
+
+GETTING STARTED:
+- How BTS Score Works: https://borealisacademy.com/hub/how-bm-score-works.html
+- Score Simulator: https://borealisacademy.com/simulator.html
+- Dashboard onboarding wizard walks through every step: ${dashboardUrl}#licenses
 
 Save this email - your raw key will NEVER be shown again.
 Only the key prefix (${keyPrefix}...) is visible in your dashboard.
 
-- BorealisMark Protocol`;
+SUPPORT: support@borealisprotocol.ai
+
+- Borealis Protocol`;
 
   if (!process.env.RESEND_API_KEY) {
     logger.info('BTS key email (NOT SENT — no RESEND_API_KEY)', {
