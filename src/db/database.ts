@@ -1480,6 +1480,19 @@ function initSchema(db: Database.Database): void {
     }
   }
 
+  // Force-verify email for Borealis internal +alias agent accounts
+  // These accounts (esimon.ng+*@gmail.com) cannot receive Gmail verification emails
+  // due to how Gmail handles plus-addressing with the verification flow.
+  // Idempotent: runs on every startup, only updates rows that need it.
+  {
+    const result = db.prepare(
+      "UPDATE users SET email_verified = 1 WHERE email LIKE 'esimon.ng+%@gmail.com' AND email_verified = 0"
+    ).run();
+    if (result.changes > 0) {
+      logger.info(`[Migration] Force-verified email for ${result.changes} internal agent account(s) (esimon.ng+ aliases)`);
+    }
+  }
+
   // Ensure the master API key exists with full admin scopes
   const masterKey = process.env.API_MASTER_KEY;
   if (!masterKey) {
