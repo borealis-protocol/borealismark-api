@@ -213,7 +213,7 @@ function terminateAgent(
   const now = Date.now();
   db.prepare(`
     UPDATE agents
-    SET active = 0, status = 'terminated', terminated_at = ?, termination_reason = ?, terminated_by = ?
+    SET active = 0, status = 'terminated', public_listing = 0, terminated_at = ?, termination_reason = ?, terminated_by = ?
     WHERE id = ?
   `).run(now, reason, terminatedBy, agentId);
 }

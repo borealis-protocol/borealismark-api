@@ -2270,6 +2270,60 @@ function initSchema(db: Database.Database): void {
       logger.info('[Upgrade] Simon user account promoted to Pro tier (agent slots 3 -> 10)', { userId: SIMON_USER_ID });
     }
   }
+
+  // ── Cleanup: Revoke stale undelivered licenses + alias test accounts ───────────
+  // BTS-LESQ (7e42c254) and BTS-NYYQ (fd9289ae) were issued but Resend rate-limited - keys never reached recipient.
+  // BTS-KN74 and BTS-EQ8L are old +alias test licenses that should be cleaned up.
+  // Orphaned +alias user accounts (esimon.ng+forge@gmail.com, esimon.ng+prism@gmail.com) deleted.
+  // All idempotent - only acts if status is still 'active'.
+  {
+    const now = Date.now();
+    const staleRevocations = [
+      { id: '7e42c254-1ab6-41ee-b99b-c18c583255fa', reason: 'email delivery failure - key never received by recipient' },
+      { id: 'fd9289ae-cc1e-4c83-883e-35c02ee5c149', reason: 'email delivery failure - key never received by recipient' },
+    ];
+    for (const { id, reason } of staleRevocations) {
+      const lic = db.prepare("SELECT id, status, agent_id FROM merlin_licenses WHERE id = ?").get(id) as any;
+      if (lic && lic.status === 'active') {
+        if (lic.agent_id) {
+          db.prepare("UPDATE agents SET active = 0, status = 'terminated', public_listing = 0, terminated_at = ?, termination_reason = ? WHERE id = ?")
+            .run(now, reason, lic.agent_id);
+        }
+        db.prepare("UPDATE merlin_licenses SET status = 'revoked', status_reason = ?, revoked_at = ? WHERE id = ?")
+          .run(reason, now, id);
+        logger.info(`[Cleanup] Revoked stale license ${id}: ${reason}`);
+      }
+    }
+
+    // Revoke old +alias test licenses by key_prefix
+    const aliasPrefixes = ['BTS-KN74', 'BTS-EQ8L'];
+    for (const prefix of aliasPrefixes) {
+      const lic = db.prepare("SELECT id, status, agent_id FROM merlin_licenses WHERE key_prefix = ? AND status = 'active'").get(prefix) as any;
+      if (lic) {
+        if (lic.agent_id) {
+          db.prepare("UPDATE agents SET active = 0, status = 'terminated', public_listing = 0, terminated_at = ?, termination_reason = ? WHERE id = ?")
+            .run(now, 'alias test license cleanup', lic.agent_id);
+        }
+        db.prepare("UPDATE merlin_licenses SET status = 'revoked', status_reason = ?, revoked_at = ? WHERE id = ?")
+          .run('alias test license cleanup', now, lic.id);
+        logger.info(`[Cleanup] Revoked alias test license ${lic.id} (key_prefix ${prefix})`);
+      }
+    }
+
+    // Delete orphaned +alias user accounts (no active licenses, test artifacts only)
+    const aliasEmails = ['esimon.ng+forge@gmail.com', 'esimon.ng+prism@gmail.com'];
+    for (const email of aliasEmails) {
+      try {
+        const aliasUser = db.prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE").get(email) as any;
+        if (aliasUser) {
+          db.prepare("DELETE FROM users WHERE id = ?").run(aliasUser.id);
+          logger.info(`[Cleanup] Deleted orphaned alias user: ${email}`);
+        }
+      } catch (e: any) {
+        logger.warn(`[Cleanup] Could not delete alias user ${email}: ${e.message}`);
+      }
+    }
+  }
 }
 
 // ─── User Queries ─────────────────────────────────────────────────────────────

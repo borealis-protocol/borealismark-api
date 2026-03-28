@@ -448,6 +448,15 @@ router.post('/my/register', requireAuth, (req, res) => {
       return;
     }
     const { name, description, version, agent_type } = parsed.data;
+
+    // Check for duplicate name under this user's account
+    const userAgents = getAgentsByUserId(user.sub);
+    const duplicate = userAgents.find((a: any) => a.name === name && a.active !== 0);
+    if (duplicate) {
+      res.status(409).json({ success: false, error: 'An active agent with this name already exists in your account.', timestamp: Date.now() });
+      return;
+    }
+
     const id = `agent_${uuidv4().replace(/-/g, '').slice(0, 20)}`;
 
     registerAgent(id, name, description ?? '', version, 'dashboard', user.sub, agent_type);
@@ -524,6 +533,18 @@ router.post('/me', requireAuth, async (req, res) => {
     }
 
     const { name, description } = parsed.data;
+
+    // Check for duplicate name under this user's account
+    const duplicateCheck = existingAgents.find((a: any) => a.name === name && a.active !== 0);
+    if (duplicateCheck) {
+      res.status(409).json({
+        success: false,
+        error: 'An active agent with this name already exists in your account.',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
     const id = `agent_${uuidv4().replace(/-/g, '').slice(0, 20)}`;
 
     registerAgent(id, name, description ?? '', '1.0.0', 'dashboard', authUser.sub, 'other');

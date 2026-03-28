@@ -125,26 +125,40 @@ router.get('/:agentId', (req: Request, res: Response) => {
 
     // Get latest certificate
     const cert = getLatestCertificate(agentId);
-    if (!cert) {
+
+    const apiBaseUrl = process.env.API_BASE_URL || 'https://borealismark-api.onrender.com';
+
+    let rawScore: number;
+    let certifiedAt: string;
+    let certificationStatus: string;
+
+    if (cert) {
+      // Audit-certified path: use certificate score
+      rawScore = (cert.score_total as number) || 0;
+      certifiedAt = new Date((cert.issued_at as number) || Date.now()).toISOString();
+      certificationStatus = 'certified';
+    } else if ((agent.bts_score as number) > 0) {
+      // BTS-only path: agent has telemetry-based score but no audit certificate yet
+      rawScore = (agent.bts_score as number);
+      certifiedAt = new Date((agent.registered_at as number) || Date.now()).toISOString();
+      certificationStatus = 'bts_verified';
+    } else {
       return res.status(404).json({ verified: false, error: 'Agent not certified' });
     }
 
-    // Parse score from certificate (raw is 0-1000, normalize to 0-100 for BM Score)
-    const rawScore = (cert.score_total as number) || 0;
-    const bmScore = Math.round((rawScore / 10) * 10) / 10; // One decimal place
+    // Normalize raw 0-1000 score to 0-100 BM Score display
+    const bmScore = Math.round((rawScore / 10) * 10) / 10;
     const tier = getTierFromScore(bmScore);
-
-    const apiBaseUrl = process.env.API_BASE_URL || 'https://borealismark-api.onrender.com';
 
     const response = {
       verified: true,
       agentId,
       agentName: agent.name as string || 'Unknown',
-      certificationStatus: 'certified',
+      certificationStatus,
       bmScore,
       tier,
-      certifiedAt: new Date((cert.issued_at as number) || Date.now()).toISOString(),
-      lastAuditAt: new Date((cert.issued_at as number) || Date.now()).toISOString(),
+      certifiedAt,
+      lastAuditAt: certifiedAt,
       badge: {
         imageUrl: `${apiBaseUrl}/v1/verify/${agentId}/badge.svg`,
         embedSnippet: `<script src="${apiBaseUrl}/v1/verify/${agentId}/badge.js"><\/script>`,
@@ -176,12 +190,14 @@ router.get('/:agentId/badge.svg', (req: Request, res: Response) => {
     }
 
     const cert = getLatestCertificate(agentId);
-    if (!cert) {
+    const btsScore = (agent as any).bts_score as number | undefined;
+
+    if (!cert && !btsScore) {
       return res.header('Content-Type', 'image/svg+xml').send(generateUnverifiedBadge());
     }
 
     // Generate verified badge with tier (normalize 0-1000 → 0-100)
-    const rawScore = (cert.score_total as number) || 0;
+    const rawScore = cert ? ((cert.score_total as number) || 0) : (btsScore || 0);
     const bmScore = Math.round((rawScore / 10) * 10) / 10;
     const tier = getTierFromScore(bmScore);
     const svg = generateVerifiedBadge(tier, bmScore);
