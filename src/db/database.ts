@@ -2238,6 +2238,25 @@ function initSchema(db: Database.Database): void {
       logger.info('[Backfill] SCOUT set to public (public_listing=1, bts_score=650, UNRATED)');
     }
   }
+
+  // ── Upgrade SCOUT license + Simon user to Pro tier ────────────────────────────
+  // One-time promotion: raises SCOUT BTS score ceiling 65 -> 85 and unlocks 10 agent slots.
+  {
+    const SCOUT_LICENSE_ID = '13ded666-2d12-49c6-963d-9a96adbacd53';
+    const SIMON_USER_ID    = 'b8882942-f58e-452a-b655-1468613d063a';
+
+    const licRow = db.prepare("SELECT id, license_tier FROM merlin_licenses WHERE id = ?").get(SCOUT_LICENSE_ID) as any;
+    if (licRow && licRow.license_tier !== 'pro') {
+      db.prepare("UPDATE merlin_licenses SET license_tier = 'pro' WHERE id = ?").run(SCOUT_LICENSE_ID);
+      logger.info('[Upgrade] SCOUT license promoted to Pro tier (score ceiling 65 -> 85)', { licenseId: SCOUT_LICENSE_ID });
+    }
+
+    const userRow = db.prepare("SELECT id, tier FROM users WHERE id = ?").get(SIMON_USER_ID) as any;
+    if (userRow && userRow.tier !== 'pro' && userRow.tier !== 'elite') {
+      db.prepare("UPDATE users SET tier = 'pro' WHERE id = ?").run(SIMON_USER_ID);
+      logger.info('[Upgrade] Simon user account promoted to Pro tier (agent slots 3 -> 10)', { userId: SIMON_USER_ID });
+    }
+  }
 }
 
 // ─── User Queries ─────────────────────────────────────────────────────────────
