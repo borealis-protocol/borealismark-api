@@ -288,6 +288,22 @@ export async function processTelemetry(
   // Update license last_audit_at
   db.prepare('UPDATE merlin_licenses SET last_audit_at = ? WHERE id = ?').run(now, licenseId);
 
+  // Step 7.5: Sync BTS score to agents table + publish to public registry.
+  // When an agent submits telemetry and receives a verified score, it earns
+  // its place in the public trust registry automatically. This is the bridge
+  // between the BTS license pipeline and the BorealisMark public search.
+  try {
+    db.prepare(
+      `UPDATE agents
+       SET bts_score = ?, bts_credit_rating = ?, public_listing = 1
+       WHERE id = ?`
+    ).run(cappedTotal, creditRating, agentId);
+    logger.info('Agent synced to public registry', { agentId, btsScore: cappedTotal, creditRating });
+  } catch (syncErr: any) {
+    // Non-fatal — score pipeline succeeded, registry sync failed
+    logger.warn('Failed to sync agent to public registry', { agentId, error: syncErr.message });
+  }
+
   logger.info('Telemetry processed', {
     scoreId,
     licenseId,

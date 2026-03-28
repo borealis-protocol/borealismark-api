@@ -23,6 +23,7 @@ import {
   toggleAgentPublicListing,
   adminSetPublicListing,
   getPublicAgents,
+  getPublicAgentsCount,
   createAuditRequest,
   getAuditRequest,
   updateAuditRequestStatus,
@@ -1010,7 +1011,8 @@ router.get('/public', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
     const offset = parseInt(req.query.offset as string) || 0;
     const agents = getPublicAgents(limit, offset);
-    res.json({ success: true, data: agents, timestamp: Date.now() });
+    const total = getPublicAgentsCount();
+    res.json({ success: true, data: agents, total, timestamp: Date.now() });
   } catch (err) {
     logger.error('Get public agents error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Failed to get public agents', timestamp: Date.now() });

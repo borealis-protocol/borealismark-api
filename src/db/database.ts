@@ -2162,6 +2162,82 @@ function initSchema(db: Database.Database): void {
       logger.info('Seeded 10 starter Spark shop items');
     }
   }
+
+  // ── PURGE MOCK DATA — March 27, 2026 ─────────────────────────────────────────
+  // Remove all fake demo bots and fake demo agents seeded during development.
+  // SCOUT (agent_eec93f5dcbae48f19e1d) is the only real agent.
+  {
+    const MOCK_BOT_IDS = [
+      'bot_1483cd2d43d849c695cf', // NovaMind AI
+      'bot_99497f81035943259c36', // TrustGuard Pro
+      'bot_0d14d5b5613340119375', // DataForge
+      'bot_206de0e790b0468fb456', // CyberSentinel
+      'bot_f42e6cf5fcc54cf0bda7', // ContentWeaver
+      'bot_c8990c036d3240cd8b3d', // MedInsight AI
+      'bot_45e97b71609f4745beb2', // LegalMind
+    ];
+    const MOCK_AGENT_IDS = [
+      'agent_1fc35eedd8bf4a3dafe2', // SentinelGuard AI
+      'agent_6c278e43e78e41f7aa59', // CodeReview Pro
+      'agent_0354f884ce544e3b9337', // DataFlow Assistant
+      'agent_89591fc3582e433e99a6', // ComplianceBot
+      'agent_ac85d1e07dd844b6964d', // ChatSupport AI
+      'agent_2d250f5abba244fbbd66', // TranslateEngine
+      'agent_d7db418872d04401ba5f', // TaskRunner Beta
+    ];
+
+    const mockBotsExist = (db.prepare(
+      `SELECT COUNT(*) as cnt FROM bots WHERE id IN (${MOCK_BOT_IDS.map(() => '?').join(',')})`
+    ).get(...MOCK_BOT_IDS) as { cnt: number }).cnt;
+
+    if (mockBotsExist > 0) {
+      const botPlaceholders = MOCK_BOT_IDS.map(() => '?').join(',');
+      db.prepare(`DELETE FROM bot_jobs WHERE bot_id IN (${botPlaceholders})`).run(...MOCK_BOT_IDS);
+      db.prepare(`DELETE FROM bot_reviews WHERE bot_id IN (${botPlaceholders})`).run(...MOCK_BOT_IDS);
+      db.prepare(`DELETE FROM bots WHERE id IN (${botPlaceholders})`).run(...MOCK_BOT_IDS);
+      logger.info(`[Purge] Deleted ${mockBotsExist} mock demo bots from bots table`);
+    }
+
+    const mockAgentsExist = (db.prepare(
+      `SELECT COUNT(*) as cnt FROM agents WHERE id IN (${MOCK_AGENT_IDS.map(() => '?').join(',')})`
+    ).get(...MOCK_AGENT_IDS) as { cnt: number }).cnt;
+
+    if (mockAgentsExist > 0) {
+      const agentPlaceholders = MOCK_AGENT_IDS.map(() => '?').join(',');
+      db.prepare(`DELETE FROM audit_certificates WHERE agent_id IN (${agentPlaceholders})`).run(...MOCK_AGENT_IDS);
+      db.prepare(`DELETE FROM agents WHERE id IN (${agentPlaceholders})`).run(...MOCK_AGENT_IDS);
+      logger.info(`[Purge] Deleted ${mockAgentsExist} mock demo agents and their certificates`);
+    }
+  }
+
+  // ── BTS Score columns on agents table ─────────────────────────────────────────
+  // Enables agents verified via BTS telemetry to appear in public search
+  // without requiring a full ARBITER/MAGISTRATE audit certificate.
+  {
+    const agentColsBts = (db.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>).map(r => r.name);
+    if (!agentColsBts.includes('bts_score')) {
+      db.exec("ALTER TABLE agents ADD COLUMN bts_score INTEGER DEFAULT NULL");
+      logger.info('Migrated agents: added bts_score column (0-1000 raw scale)');
+    }
+    if (!agentColsBts.includes('bts_credit_rating')) {
+      db.exec("ALTER TABLE agents ADD COLUMN bts_credit_rating TEXT DEFAULT NULL");
+      logger.info('Migrated agents: added bts_credit_rating column');
+    }
+  }
+
+  // ── Backfill SCOUT into public registry ───────────────────────────────────────
+  // SCOUT submitted telemetry, received BTS score 650 (display 65, UNRATED),
+  // anchored to Hedera. Set public_listing=1 so it appears in BorealisMark search.
+  {
+    const SCOUT_AGENT_ID = 'agent_eec93f5dcbae48f19e1d';
+    const scoutRow = db.prepare('SELECT id, public_listing, bts_score FROM agents WHERE id = ?').get(SCOUT_AGENT_ID) as any;
+    if (scoutRow && (scoutRow.public_listing !== 1 || scoutRow.bts_score == null)) {
+      db.prepare(
+        'UPDATE agents SET public_listing = 1, bts_score = 650, bts_credit_rating = ? WHERE id = ?'
+      ).run('UNRATED', SCOUT_AGENT_ID);
+      logger.info('[Backfill] SCOUT set to public (public_listing=1, bts_score=650, UNRATED)');
+    }
+  }
 }
 
 // ─── User Queries ─────────────────────────────────────────────────────────────
@@ -2855,18 +2931,34 @@ export function adminSetPublicListing(agentId: string, publicListing: boolean): 
 export function getPublicAgents(limit: number = 50, offset: number = 0): Record<string, unknown>[] {
   return getDb()
     .prepare(
-      `SELECT a.*, ac.score_total, ac.credit_rating, ac.certificate_id, ac.issued_at as last_audit_at
+      // Agents with audit certificates are ordered by their certified score.
+      // Agents with only a BTS telemetry score (no audit cert yet) fall back
+      // to bts_score for ordering and display. Both pathways use the same
+      // score_total and credit_rating fields in the response for uniform UI.
+      `SELECT a.*,
+              COALESCE(ac.score_total, a.bts_score) AS score_total,
+              COALESCE(ac.credit_rating, a.bts_credit_rating) AS credit_rating,
+              ac.certificate_id,
+              ac.issued_at AS last_audit_at,
+              CASE WHEN ac.certificate_id IS NOT NULL THEN 'audited' ELSE 'bts' END AS trust_source
        FROM agents a
        LEFT JOIN (
          SELECT agent_id, score_total, credit_rating, certificate_id, issued_at,
-                ROW_NUMBER() OVER (PARTITION BY agent_id ORDER BY issued_at DESC) as rn
+                ROW_NUMBER() OVER (PARTITION BY agent_id ORDER BY issued_at DESC) AS rn
          FROM audit_certificates WHERE revoked = 0
        ) ac ON a.id = ac.agent_id AND ac.rn = 1
        WHERE a.active = 1 AND a.public_listing = 1
-       ORDER BY ac.score_total DESC NULLS LAST
+       ORDER BY COALESCE(ac.score_total, a.bts_score) DESC NULLS LAST
        LIMIT ? OFFSET ?`,
     )
     .all(limit, offset) as Record<string, unknown>[];
+}
+
+export function getPublicAgentsCount(): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) as cnt FROM agents WHERE active = 1 AND public_listing = 1`)
+    .get() as { cnt: number };
+  return row.cnt;
 }
 
 // ─── Certificate Queries ──────────────────────────────────────────────────────
