@@ -45,9 +45,10 @@ const router = Router();
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const BOT_LIMITS = {
+  free: 1,
   standard: 3,
   pro: 10,
-  elite: 50,
+  elite: 20,
 };
 
 // AP multiplier by user subscription tier (advertised in Agent Plans)
@@ -246,9 +247,13 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
   try {
     const { sub: userId } = (req as any).user;
 
+    const user = getUserById(userId);
+    const userTier = user?.tier || 'standard';
+    const limit = BOT_LIMITS[userTier as keyof typeof BOT_LIMITS] ?? BOT_LIMITS.standard;
+
     const bots = getBotsByOwnerId(userId);
 
-    const data = bots.map(bot => ({
+    const botData = bots.map(bot => ({
       id: bot.id,
       ownerId: bot.owner_id,
       name: bot.name,
@@ -268,7 +273,7 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
       updatedAt: bot.updated_at,
     }));
 
-    res.json({ success: true, data });
+    res.json({ success: true, data: { bots: botData, limit } });
   } catch (err: any) {
     logger.error('List bots error', { error: err.message });
     res.status(500).json({ success: false, error: 'Failed to list bots' });

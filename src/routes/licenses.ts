@@ -77,6 +77,7 @@ const INACTIVITY_THRESHOLD_DAYS = 90;
 
 // Agent caps per user tier — users must upgrade to unlock more agent slots
 const TIER_AGENT_LIMITS: Record<string, number> = {
+  free: 1,       // Free tier: 1 agent (score capped at 65)
   standard: 3,   // Standard tier: 3 agents
   pro: 10,       // Pro tier ($149/yr): 10 agents
   elite: 20,     // Elite tier ($349/yr): 20 agents
