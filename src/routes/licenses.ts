@@ -33,6 +33,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import { v4 as uuid } from 'uuid';
 import rateLimit from 'express-rate-limit';
 import { getDb } from '../db/database';
@@ -289,6 +290,7 @@ const AdminActionSchema = z.object({
 
 const FreeKeySchema = z.object({
   email: z.string().email('Must be a valid email address').max(255),
+  agent_name: z.string().min(1).max(100).optional(),
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -312,11 +314,26 @@ router.post('/free', publicBtsLimiter, async (req: Request, res: Response) => {
       return;
     }
 
-    const { email } = parsed.data;
+    const { email, agent_name } = parsed.data;
     const db = getDb();
 
-    // Check if email already has a free key (1 per email, ever)
-    const existingFreeKey = db.prepare(`
+    // Optional admin bypass: if a valid JWT with role=admin is in the Authorization header,
+    // skip the 1-per-email limit so admins can issue multiple free keys (e.g. for internal agents).
+    let isAdmin = false;
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith('Bearer ')) {
+      try {
+        const decoded = jwt.verify(authHeader.slice(7), process.env.JWT_SECRET || '') as JwtPayload;
+        if (decoded.role === 'admin') {
+          isAdmin = true;
+        }
+      } catch {
+        // Invalid/expired token — not an error, just not an admin request
+      }
+    }
+
+    // Check if email already has a free key (1 per email, ever) — bypass for admins
+    const existingFreeKey = !isAdmin && db.prepare(`
       SELECT ml.id FROM merlin_licenses ml
       JOIN users u ON ml.user_id = u.id
       WHERE u.email = ? COLLATE NOCASE
@@ -371,8 +388,9 @@ router.post('/free', publicBtsLimiter, async (req: Request, res: Response) => {
       paymentMethod: 'free',
       licenseTier: 'free',
       keyPrefix,
-      source: 'free-tier-claim',
-    }, 'free-tier', getClientIp(req));
+      source: isAdmin ? 'admin-free-issue' : 'free-tier-claim',
+      ...(agent_name ? { agentName: agent_name } : {}),
+    }, isAdmin ? 'admin' : 'free-tier', getClientIp(req));
 
     // Email the key - raw key is transmitted exactly once
     const delivered = await sendBTSKeyEmail(email, user.name || 'there', rawKey, keyPrefix);
