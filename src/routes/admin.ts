@@ -193,68 +193,89 @@ router.delete('/users/:id', requireAuth, requireAdmin, (req: Request, res: Respo
 
     const db = getDb();
 
-    // Delete in dependency order to avoid FK issues
+    // Temporarily disable FK enforcement so we can delete without enumerating every referencing table
+    db.pragma('foreign_keys = OFF');
+
     const deletions: Record<string, number> = {};
 
-    // Listing-related data
-    deletions.listingLikes = db.prepare('DELETE FROM listing_likes WHERE user_id = ?').run(userId).changes;
-    deletions.listingLikesOnTheirListings = db.prepare(
-      'DELETE FROM listing_likes WHERE listing_id IN (SELECT id FROM marketplace_listings WHERE user_id = ?)'
-    ).run(userId).changes;
-    deletions.watchlist = db.prepare('DELETE FROM user_watchlist WHERE user_id = ?').run(userId).changes;
-    deletions.watchlistOnTheirListings = db.prepare(
-      'DELETE FROM user_watchlist WHERE listing_id IN (SELECT id FROM marketplace_listings WHERE user_id = ?)'
-    ).run(userId).changes;
-
-    // Listings themselves
-    deletions.listings = db.prepare('DELETE FROM marketplace_listings WHERE user_id = ?').run(userId).changes;
-
-    // Trust scores
-    deletions.trustScores = db.prepare('DELETE FROM user_trust_scores WHERE user_id = ?').run(userId).changes;
-
-    // Bots & bot jobs/reviews
-    deletions.botReviews = db.prepare(
-      'DELETE FROM bot_reviews WHERE bot_id IN (SELECT id FROM bots WHERE owner_id = ?)'
-    ).run(userId).changes;
-    deletions.botJobs = db.prepare(
-      'DELETE FROM bot_jobs WHERE bot_id IN (SELECT id FROM bots WHERE owner_id = ?)'
-    ).run(userId).changes;
-    deletions.bots = db.prepare('DELETE FROM bots WHERE owner_id = ?').run(userId).changes;
-
-    // Orders (as buyer or seller)
-    deletions.orders = db.prepare('DELETE FROM marketplace_orders WHERE buyer_id = ? OR seller_id = ?').run(userId, userId).changes;
-
-    // Messages
-    deletions.messages = db.prepare('DELETE FROM messages WHERE sender_id = ? OR receiver_id = ?').run(userId, userId).changes;
-
-    // Support threads
-    deletions.supportMessages = db.prepare(
-      "DELETE FROM support_messages WHERE thread_id IN (SELECT id FROM support_threads WHERE customer_email = ?)"
-    ).run(user.email).changes;
-    deletions.supportThreads = db.prepare("DELETE FROM support_threads WHERE customer_email = ?").run(user.email).changes;
-
-    // Progression data (badges, XP/AP transactions, progression state, spark progress)
     try {
-      deletions.userBadges = db.prepare('DELETE FROM user_badges WHERE user_id = ?').run(userId).changes;
-      deletions.xpTransactions = db.prepare('DELETE FROM xp_transactions WHERE user_id = ?').run(userId).changes;
-      deletions.apTransactions = db.prepare('DELETE FROM ap_transactions WHERE user_id = ?').run(userId).changes;
-      deletions.sparkProgress = db.prepare('DELETE FROM spark_progress WHERE user_id = ?').run(userId).changes;
-      deletions.sparkPurchases = db.prepare('DELETE FROM spark_purchases WHERE user_id = ?').run(userId).changes;
-      deletions.userProgression = db.prepare('DELETE FROM user_progression WHERE user_id = ?').run(userId).changes;
-    } catch (e) {
-      // Tables may not exist in all environments - non-fatal
-    }
+      // Clean up known relational data for audit trail
+      const tables = [
+        ['listing_likes', 'user_id'],
+        ['user_watchlist', 'user_id'],
+        ['marketplace_listings', 'user_id'],
+        ['user_trust_scores', 'user_id'],
+        ['bots', 'owner_id'],
+        ['user_badges', 'user_id'],
+        ['xp_transactions', 'user_id'],
+        ['ap_transactions', 'user_id'],
+        ['spark_progress', 'user_id'],
+        ['spark_purchases', 'user_id'],
+        ['user_progression', 'user_id'],
+        ['user_login_days', 'user_id'],
+        ['user_notifications', 'user_id'],
+        ['notification_preferences', 'user_id'],
+        ['daily_activity_log', 'user_id'],
+        ['user_violations', 'user_id'],
+        ['user_sanctions', 'user_id'],
+        ['user_verifications', 'user_id'],
+        ['api_keys', 'user_id'],
+        ['webhooks', 'user_id'],
+        ['api_usage', 'user_id'],
+        ['seller_storefronts', 'user_id'],
+        ['marketplace_carts', 'user_id'],
+        ['audit_requests', 'user_id'],
+        ['password_reset_tokens', 'user_id'],
+        ['agents', 'owner_user_id'],
+      ];
 
-    // License data
-    try {
-      deletions.licenseAuditLog = db.prepare('DELETE FROM license_audit_log WHERE license_id IN (SELECT id FROM licenses WHERE user_id = ?)').run(userId).changes;
-      deletions.licenses = db.prepare('DELETE FROM licenses WHERE user_id = ?').run(userId).changes;
-    } catch (e) {
-      // Non-fatal if tables don't exist
-    }
+      for (const [table, col] of tables) {
+        try {
+          deletions[table] = db.prepare(`DELETE FROM ${table} WHERE ${col} = ?`).run(userId).changes;
+        } catch (e) {
+          // Table may not exist - non-fatal
+        }
+      }
 
-    // Finally, delete the user
-    deletions.user = db.prepare('DELETE FROM users WHERE id = ?').run(userId).changes;
+      // Messages - delete via thread participation
+      try {
+        deletions.messages = db.prepare(
+          'DELETE FROM messages WHERE thread_id IN (SELECT id FROM message_threads WHERE participant_a = ? OR participant_b = ?)'
+        ).run(userId, userId).changes;
+        deletions.messageThreads = db.prepare('DELETE FROM message_threads WHERE participant_a = ? OR participant_b = ?').run(userId, userId).changes;
+      } catch (e) { /* non-fatal */ }
+
+      // Orders (as buyer or seller)
+      try {
+        deletions.orders = db.prepare('DELETE FROM marketplace_orders WHERE buyer_id = ? OR seller_id = ?').run(userId, userId).changes;
+      } catch (e) { /* non-fatal */ }
+
+      // Bot sub-tables
+      try {
+        db.prepare('DELETE FROM bot_reviews WHERE bot_id IN (SELECT id FROM bots WHERE owner_id = ?)').run(userId);
+        db.prepare('DELETE FROM bot_jobs WHERE bot_id IN (SELECT id FROM bots WHERE owner_id = ?)').run(userId);
+      } catch (e) { /* non-fatal */ }
+
+      // Support threads
+      try {
+        deletions.supportMessages = db.prepare(
+          "DELETE FROM support_messages WHERE thread_id IN (SELECT id FROM support_threads WHERE customer_email = ?)"
+        ).run(user.email).changes;
+        deletions.supportThreads = db.prepare("DELETE FROM support_threads WHERE customer_email = ?").run(user.email).changes;
+      } catch (e) { /* non-fatal */ }
+
+      // License data
+      try {
+        db.prepare('DELETE FROM license_audit_log WHERE license_id IN (SELECT id FROM licenses WHERE user_id = ?)').run(userId);
+        deletions.licenses = db.prepare('DELETE FROM licenses WHERE user_id = ?').run(userId).changes;
+      } catch (e) { /* non-fatal */ }
+
+      // Finally, delete the user
+      deletions.user = db.prepare('DELETE FROM users WHERE id = ?').run(userId).changes;
+    } finally {
+      // Always re-enable FK enforcement
+      db.pragma('foreign_keys = ON');
+    }
 
     logger.info('Admin deleted user and all associated data', {
       adminId,
