@@ -233,6 +233,26 @@ router.delete('/users/:id', requireAuth, requireAdmin, (req: Request, res: Respo
     ).run(user.email).changes;
     deletions.supportThreads = db.prepare("DELETE FROM support_threads WHERE customer_email = ?").run(user.email).changes;
 
+    // Progression data (badges, XP/AP transactions, progression state, spark progress)
+    try {
+      deletions.userBadges = db.prepare('DELETE FROM user_badges WHERE user_id = ?').run(userId).changes;
+      deletions.xpTransactions = db.prepare('DELETE FROM xp_transactions WHERE user_id = ?').run(userId).changes;
+      deletions.apTransactions = db.prepare('DELETE FROM ap_transactions WHERE user_id = ?').run(userId).changes;
+      deletions.sparkProgress = db.prepare('DELETE FROM spark_progress WHERE user_id = ?').run(userId).changes;
+      deletions.sparkPurchases = db.prepare('DELETE FROM spark_purchases WHERE user_id = ?').run(userId).changes;
+      deletions.userProgression = db.prepare('DELETE FROM user_progression WHERE user_id = ?').run(userId).changes;
+    } catch (e) {
+      // Tables may not exist in all environments - non-fatal
+    }
+
+    // License data
+    try {
+      deletions.licenseAuditLog = db.prepare('DELETE FROM license_audit_log WHERE license_id IN (SELECT id FROM licenses WHERE user_id = ?)').run(userId).changes;
+      deletions.licenses = db.prepare('DELETE FROM licenses WHERE user_id = ?').run(userId).changes;
+    } catch (e) {
+      // Non-fatal if tables don't exist
+    }
+
     // Finally, delete the user
     deletions.user = db.prepare('DELETE FROM users WHERE id = ?').run(userId).changes;
 
