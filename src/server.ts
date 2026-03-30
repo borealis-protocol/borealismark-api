@@ -41,6 +41,7 @@ import auditRouter from './routes/audit';
 import licensesRouter from './routes/licenses';
 import contactRouter from './routes/contact';
 import claudeRouter from './routes/claude';
+import sidecarRouter from './routes/sidecar';
 import { cleanupExpiredInvoices } from './hedera/usdc';
 import { validateHederaConfig, logHealthCheckResults } from './hedera/healthcheck';
 import { validateStripeConfig, getStripeMode } from './stripe/mode';
@@ -54,6 +55,7 @@ import {
   getBotsByOwnerSortedByActivity, suspendBot, countBotsByOwnerId,
 } from './db/database';
 import { sendSubscriptionExpiryReminder, sendDowngradeNotificationEmail } from './services/email';
+import { startSidecarRunner } from './sidecar/runner';
 import { moderateServerSide, determineAction, actionToSanctionParams, type SanctionAction } from './middleware/messageModeration';
 
 const app = express();
@@ -235,6 +237,7 @@ app.use('/v1/audit', auditRouter);
 app.use('/v1/licenses', licensesRouter);
 app.use('/v1/contact',  contactRouter);
 app.use('/v1/claude',   claudeRouter);
+app.use('/v1/sidecar',  sidecarRouter);
 
 // ─── Static Files (Dashboard) ────────────────────────────────────────────────
 
@@ -567,6 +570,7 @@ const server = app.listen(PORT, () => {
   // Start data infrastructure
   startAggregationSchedule();
   startAnchoringSchedule();
+  startSidecarRunner();
   initAdminNotifications();
   initNotificationListeners();
   initProgressionListeners();

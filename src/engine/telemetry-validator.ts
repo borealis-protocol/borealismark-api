@@ -269,7 +269,7 @@ export function transformToScoringInput(payload: TelemetryPayload): {
 
 /**
  * Free-tier keys are hard-capped at 650/1000 (display: 65) regardless of
- * reporting mode. This creates the upgrade incentive: pay $129.99 for Pro
+ * reporting mode. This creates the upgrade incentive: pay $39.99 for Merlin
  * and unlock BM Score up to 85 (self-reported) or 100 (sidecar-verified).
  *
  * Pro-tier keys follow the reporting-mode ceiling:

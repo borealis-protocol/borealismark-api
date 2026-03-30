@@ -150,11 +150,17 @@ router.get('/:agentId', (req: Request, res: Response) => {
     const bmScore = Math.round((rawScore / 10) * 10) / 10;
     const tier = getTierFromScore(bmScore);
 
+    // Determine trust source
+    const trustSource = (agent.sidecar_verified_at as number) ? 'sidecar-verified'
+      : cert ? 'audited'
+      : 'bts';
+
     const response = {
       verified: true,
       agentId,
       agentName: agent.name as string || 'Unknown',
       certificationStatus,
+      trustSource,
       bmScore,
       tier,
       certifiedAt,

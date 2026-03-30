@@ -2352,6 +2352,26 @@ function initSchema(db: Database.Database): void {
       logger.info('Migrated agents: added sidecar_attestation column (JSON attestation record)');
     }
   }
+
+  // ── Sidecar Requests Queue ─────────────────────────────────────────────────────
+  // Tracks user-initiated sidecar verification requests. A lightweight queue
+  // processed by an interval runner on the server.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sidecar_requests (
+      id          TEXT PRIMARY KEY,
+      agent_id    TEXT NOT NULL,
+      user_id     TEXT NOT NULL,
+      requested_at INTEGER NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'queued',
+      completed_at INTEGER,
+      result      TEXT,
+      error       TEXT,
+      FOREIGN KEY (agent_id) REFERENCES agents(id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sidecar_req_agent ON sidecar_requests(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_sidecar_req_status ON sidecar_requests(status);
+  `);
 }
 
 // ─── User Queries ─────────────────────────────────────────────────────────────
@@ -3234,6 +3254,71 @@ export function getTotalForfeited(depositId: string): number {
     .prepare('SELECT COALESCE(SUM(amount_slashed), 0) as total FROM slash_events WHERE stake_id = ?')
     .get(depositId) as { total: number } | undefined;
   return result?.total ?? 0;
+}
+
+// ─── Sidecar Verification Queue ─────────────────────────────────────────────
+
+export function createSidecarRequest(id: string, agentId: string, userId: string): void {
+  getDb().prepare(`
+    INSERT INTO sidecar_requests (id, agent_id, user_id, requested_at, status)
+    VALUES (?, ?, ?, ?, 'queued')
+  `).run(id, agentId, userId, Date.now());
+}
+
+export function getSidecarRequestByAgent(agentId: string, windowMs: number = 30 * 24 * 60 * 60 * 1000): Record<string, unknown> | undefined {
+  const cutoff = Date.now() - windowMs;
+  return getDb().prepare(`
+    SELECT * FROM sidecar_requests
+    WHERE agent_id = ? AND requested_at > ?
+    ORDER BY requested_at DESC LIMIT 1
+  `).get(agentId, cutoff) as Record<string, unknown> | undefined;
+}
+
+export function getQueuedSidecarRequests(limit: number = 5): Record<string, unknown>[] {
+  return getDb().prepare(`
+    SELECT sr.*, a.name AS agent_name, u.email AS user_email, u.name AS user_name
+    FROM sidecar_requests sr
+    JOIN agents a ON sr.agent_id = a.id
+    JOIN users u ON sr.user_id = u.id
+    WHERE sr.status = 'queued'
+    ORDER BY sr.requested_at ASC
+    LIMIT ?
+  `).all(limit) as Record<string, unknown>[];
+}
+
+export function updateSidecarRequest(id: string, status: string, result?: string, error?: string): void {
+  getDb().prepare(`
+    UPDATE sidecar_requests
+    SET status = ?, completed_at = ?, result = ?, error = ?
+    WHERE id = ?
+  `).run(status, Date.now(), result ?? null, error ?? null, id);
+}
+
+export function getTelemetryCountForAgent(agentId: string): number {
+  const row = getDb().prepare(`
+    SELECT COUNT(*) AS cnt FROM license_score_history WHERE agent_id = ?
+  `).get(agentId) as { cnt: number } | undefined;
+  return row?.cnt ?? 0;
+}
+
+export function getActiveMerlinLicenseForUser(userId: string): Record<string, unknown> | undefined {
+  return getDb().prepare(`
+    SELECT * FROM merlin_licenses
+    WHERE user_id = ? AND status = 'active' AND license_tier = 'pro'
+    ORDER BY created_at DESC LIMIT 1
+  `).get(userId) as Record<string, unknown> | undefined;
+}
+
+export function setSidecarVerified(agentId: string, attestation: string): void {
+  getDb().prepare(`
+    UPDATE agents SET sidecar_verified_at = ?, sidecar_attestation = ? WHERE id = ?
+  `).run(Date.now(), attestation, agentId);
+}
+
+export function clearSidecarVerification(agentId: string): void {
+  getDb().prepare(`
+    UPDATE agents SET sidecar_verified_at = NULL, sidecar_attestation = NULL WHERE id = ?
+  `).run(agentId);
 }
 
 // ─── Backward Compatibility Aliases ──────────────────────────────────────────

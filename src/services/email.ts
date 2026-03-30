@@ -2082,3 +2082,116 @@ export async function sendAdminFreeKeyNotification(
     return false;
   }
 }
+
+// ─── Sidecar Verification Emails ─────────────────────────────────────────────
+
+/**
+ * Send notification when an agent is independently verified.
+ */
+export async function sendSidecarVerifiedEmail(
+  toEmail: string,
+  userName: string,
+  agentName: string,
+  agentId: string,
+): Promise<boolean> {
+  const frontendUrl = (process.env.FRONTEND_URL ?? 'https://borealismark.com').replace(/\/$/, '');
+  const agentLink = `${frontendUrl}/verify.html?id=${encodeURIComponent(agentId)}`;
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#09090b;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;background:#141416;border:1px solid #222226;border-radius:8px;overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#1a3a2a,#141416);padding:32px 24px;text-align:center;">
+      <div style="display:inline-block;background:#34d39920;border:1px solid #34d399;border-radius:50%;width:48px;height:48px;line-height:48px;font-size:24px;margin-bottom:12px;">&#10003;</div>
+      <h1 style="color:#f4f4f5;font-size:20px;margin:0;">Independently Verified</h1>
+    </div>
+    <div style="padding:24px;">
+      <p style="color:#a1a1aa;font-size:14px;line-height:1.6;margin:0 0 16px;">
+        ${userName ? userName + ', your' : 'Your'} agent <strong style="color:#f4f4f5;">${agentName}</strong> has been independently verified by two separate evaluation systems.
+      </p>
+      <p style="color:#a1a1aa;font-size:14px;line-height:1.6;margin:0 0 24px;">
+        Your trust score ceiling has been removed. Your agent's score now reflects its full evaluated performance with no cap.
+      </p>
+      <div style="text-align:center;margin-bottom:16px;">
+        <a href="${agentLink}" style="display:inline-block;padding:10px 24px;background:#d4a853;color:#09090b;text-decoration:none;border-radius:6px;font-size:14px;font-weight:600;">View Your Agent</a>
+      </div>
+    </div>
+    <div style="padding:16px 24px;border-top:1px solid #222226;text-align:center;">
+      <p style="color:#52525b;font-size:12px;margin:0;">Borealis Protocol - Follow the North Star</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Your agent ${agentName} has been independently verified. Your trust score ceiling has been removed. View your agent: ${agentLink}`;
+
+  try {
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [toEmail],
+      subject: `Your agent ${agentName} is independently verified`,
+      html,
+      text,
+    });
+    if (result.error) { logger.error('Sidecar verified email failed', { error: result.error }); return false; }
+    logger.info('Sidecar verified email sent', { to: toEmail, agentName });
+    return true;
+  } catch (err: any) {
+    logger.error('Sidecar verified email error', { error: err.message });
+    return false;
+  }
+}
+
+/**
+ * Send notification when sidecar verification could not confirm an agent.
+ */
+export async function sendSidecarFailedEmail(
+  toEmail: string,
+  userName: string,
+  agentName: string,
+): Promise<boolean> {
+  const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#09090b;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;background:#141416;border:1px solid #222226;border-radius:8px;overflow:hidden;">
+    <div style="padding:32px 24px;">
+      <h1 style="color:#f4f4f5;font-size:20px;margin:0 0 16px;">Verification Update</h1>
+      <p style="color:#a1a1aa;font-size:14px;line-height:1.6;margin:0 0 16px;">
+        ${userName ? userName + ', your' : 'Your'} agent <strong style="color:#f4f4f5;">${agentName}</strong> was evaluated but couldn't be independently verified yet.
+      </p>
+      <p style="color:#a1a1aa;font-size:14px;line-height:1.6;margin:0 0 16px;">
+        This usually means more behavioral data is needed. Keep submitting telemetry and request verification again in 30 days.
+      </p>
+      <p style="color:#a1a1aa;font-size:14px;line-height:1.6;margin:0;">
+        Your current trust score and rating are unaffected.
+      </p>
+    </div>
+    <div style="padding:16px 24px;border-top:1px solid #222226;text-align:center;">
+      <p style="color:#52525b;font-size:12px;margin:0;">Borealis Protocol - Follow the North Star</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Your agent ${agentName} was evaluated but couldn't be independently verified yet. This usually means more behavioral data is needed. Keep submitting telemetry and request again in 30 days.`;
+
+  try {
+    const result = await getResend().emails.send({
+      from: FROM_ADDRESS,
+      to: [toEmail],
+      subject: `Verification update for ${agentName}`,
+      html,
+      text,
+    });
+    if (result.error) { logger.error('Sidecar failed email failed', { error: result.error }); return false; }
+    logger.info('Sidecar failed email sent', { to: toEmail, agentName });
+    return true;
+  } catch (err: any) {
+    logger.error('Sidecar failed email error', { error: err.message });
+    return false;
+  }
+}
