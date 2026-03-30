@@ -659,4 +659,244 @@ router.get('/backup/stats', requireAuth, requireAdmin, (_req: Request, res: Resp
   }
 });
 
+// ─── LICENSE MANAGEMENT (JWT-authenticated for Mission Control) ──────────────
+
+// GET /admin/licenses — Full license audit dashboard
+router.get('/licenses', requireAuth, requireAdmin, (_req: Request, res: Response) => {
+  try {
+    const db = getDb();
+
+    // Stats
+    const stats = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as active,
+        SUM(CASE WHEN status='suspended' THEN 1 ELSE 0 END) as suspended,
+        SUM(CASE WHEN status='revoked' THEN 1 ELSE 0 END) as revoked,
+        SUM(CASE WHEN status='terminated' THEN 1 ELSE 0 END) as terminated,
+        SUM(CASE WHEN agent_id IS NOT NULL THEN 1 ELSE 0 END) as activated,
+        SUM(CASE WHEN agent_id IS NULL THEN 1 ELSE 0 END) as unactivated
+      FROM licenses
+    `).get() as any;
+
+    const revenue = db.prepare(`
+      SELECT
+        COALESCE(SUM(purchase_price), 0) as totalRevenue,
+        COUNT(CASE WHEN purchase_price > 0 THEN 1 END) as totalPurchases,
+        COALESCE(AVG(CASE WHEN purchase_price > 0 THEN purchase_price END), 0) as averagePrice
+      FROM licenses
+    `).get() as any;
+
+    // All licenses with user and agent info
+    const licenses = db.prepare(`
+      SELECT
+        l.id, l.key_prefix, l.key_hash, l.user_id, l.agent_id, l.agent_name,
+        l.status, l.status_reason, l.license_tier, l.slot_cap, l.slots_used,
+        l.score_ceiling, l.purchase_price, l.payment_method, l.order_id,
+        l.created_at, l.activated_at, l.last_verified_at, l.verify_count,
+        l.hedera_tx_id, l.ip_address,
+        u.name as user_name, u.email as user_email,
+        a.bts_score, a.credit_rating
+      FROM licenses l
+      LEFT JOIN users u ON l.user_id = u.id
+      LEFT JOIN agents a ON l.agent_id = a.id
+      ORDER BY l.created_at DESC
+    `).all();
+
+    // Recent audit events
+    const recentEvents = db.prepare(`
+      SELECT id, license_id, key_prefix, user_id, event_type, event_data, actor, ip_address, created_at
+      FROM license_audit_log
+      ORDER BY created_at DESC
+      LIMIT 50
+    `).all();
+
+    res.json({
+      success: true,
+      stats,
+      revenue,
+      licenses,
+      recentEvents,
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, timestamp: Date.now() });
+  }
+});
+
+// POST /admin/licenses/:id/suspend — Temporarily suspend a license
+router.post('/licenses/:id/suspend', requireAuth, requireAdmin, (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { id } = req.params;
+    const { reason } = req.body;
+    if (!reason) { res.status(400).json({ success: false, error: 'Reason required' }); return; }
+
+    const license = db.prepare('SELECT * FROM licenses WHERE id = ?').get(id) as any;
+    if (!license) { res.status(404).json({ success: false, error: 'License not found' }); return; }
+    if (license.status !== 'active') { res.status(400).json({ success: false, error: `Cannot suspend: status is ${license.status}` }); return; }
+
+    db.prepare('UPDATE licenses SET status = ?, status_reason = ? WHERE id = ?').run('suspended', reason, id);
+
+    // Audit log
+    db.prepare(`INSERT INTO license_audit_log (license_id, key_prefix, user_id, event_type, event_data, actor, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      id, license.key_prefix, license.user_id, 'suspended',
+      JSON.stringify({ reason, previousStatus: 'active' }),
+      'admin:mc', req.ip
+    );
+
+    res.json({ success: true, licenseId: id, status: 'suspended', reason, timestamp: Date.now() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, timestamp: Date.now() });
+  }
+});
+
+// POST /admin/licenses/:id/restore — Restore a suspended license
+router.post('/licenses/:id/restore', requireAuth, requireAdmin, (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { id } = req.params;
+    const { reason } = req.body;
+    if (!reason) { res.status(400).json({ success: false, error: 'Reason required' }); return; }
+
+    const license = db.prepare('SELECT * FROM licenses WHERE id = ?').get(id) as any;
+    if (!license) { res.status(404).json({ success: false, error: 'License not found' }); return; }
+    if (license.status !== 'suspended') { res.status(400).json({ success: false, error: `Cannot restore: status is ${license.status}` }); return; }
+
+    db.prepare('UPDATE licenses SET status = ?, status_reason = ? WHERE id = ?').run('active', reason, id);
+
+    db.prepare(`INSERT INTO license_audit_log (license_id, key_prefix, user_id, event_type, event_data, actor, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      id, license.key_prefix, license.user_id, 'restored',
+      JSON.stringify({ reason, previousStatus: 'suspended' }),
+      'admin:mc', req.ip
+    );
+
+    res.json({ success: true, licenseId: id, status: 'active', reason, timestamp: Date.now() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, timestamp: Date.now() });
+  }
+});
+
+// POST /admin/licenses/:id/revoke — Permanently revoke a license
+router.post('/licenses/:id/revoke', requireAuth, requireAdmin, (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { id } = req.params;
+    const { reason } = req.body;
+    if (!reason) { res.status(400).json({ success: false, error: 'Reason required' }); return; }
+
+    const license = db.prepare('SELECT * FROM licenses WHERE id = ?').get(id) as any;
+    if (!license) { res.status(404).json({ success: false, error: 'License not found' }); return; }
+    if (license.status === 'revoked' || license.status === 'terminated') {
+      res.status(400).json({ success: false, error: `Already ${license.status}` }); return;
+    }
+
+    db.prepare('UPDATE licenses SET status = ?, status_reason = ? WHERE id = ?').run('revoked', reason, id);
+
+    // Also terminate bound agent if exists
+    if (license.agent_id) {
+      db.prepare('UPDATE agents SET status = ?, status_reason = ? WHERE id = ?').run('terminated', `License revoked: ${reason}`, license.agent_id);
+    }
+
+    db.prepare(`INSERT INTO license_audit_log (license_id, key_prefix, user_id, event_type, event_data, actor, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      id, license.key_prefix, license.user_id, 'revoked',
+      JSON.stringify({ reason, previousStatus: license.status, agentTerminated: !!license.agent_id }),
+      'admin:mc', req.ip
+    );
+
+    res.json({ success: true, licenseId: id, status: 'revoked', reason, agentTerminated: !!license.agent_id, timestamp: Date.now() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, timestamp: Date.now() });
+  }
+});
+
+// DELETE /admin/licenses/:id — Hard delete a license (test cleanup only)
+router.delete('/licenses/:id', requireAuth, requireAdmin, (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { id } = req.params;
+
+    const license = db.prepare('SELECT * FROM licenses WHERE id = ?').get(id) as any;
+    if (!license) { res.status(404).json({ success: false, error: 'License not found' }); return; }
+
+    // Delete audit log entries first
+    db.prepare('DELETE FROM license_audit_log WHERE license_id = ?').run(id);
+    // Delete score history
+    try { db.prepare('DELETE FROM license_score_history WHERE license_id = ?').run(id); } catch {}
+    // Delete the license
+    db.prepare('DELETE FROM licenses WHERE id = ?').run(id);
+
+    db.prepare(`INSERT INTO license_audit_log (license_id, key_prefix, user_id, event_type, event_data, actor, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      id, license.key_prefix, license.user_id, 'deleted',
+      JSON.stringify({ reason: 'Admin hard delete', previousStatus: license.status }),
+      'admin:mc', req.ip
+    );
+
+    res.json({ success: true, licenseId: id, deleted: true, timestamp: Date.now() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, timestamp: Date.now() });
+  }
+});
+
+// POST /admin/licenses/generate-free — Generate a free BTS key from MC
+router.post('/licenses/generate-free', requireAuth, requireAdmin, (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { email, agent_name } = req.body;
+    if (!email) { res.status(400).json({ success: false, error: 'Email required' }); return; }
+
+    const crypto = require('crypto');
+
+    // Check if user exists, create if not
+    let user = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
+    if (!user) {
+      const userId = crypto.randomUUID();
+      db.prepare('INSERT INTO users (id, name, email, role, created_at) VALUES (?, ?, ?, ?, ?)').run(
+        userId, email.split('@')[0], email, 'user', new Date().toISOString()
+      );
+      user = { id: userId, email };
+    }
+
+    // Generate BTS key
+    const rawKey = `BTS-${generateKeySegment()}-${generateKeySegment()}-${generateKeySegment()}-${generateKeySegment()}`;
+    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+    const keyPrefix = rawKey.substring(0, 8);
+    const licenseId = crypto.randomUUID();
+
+    db.prepare(`INSERT INTO licenses (id, key_hash, key_prefix, user_id, license_tier, status, score_ceiling, slot_cap, slots_used, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      licenseId, keyHash, keyPrefix, user.id, 'free', 'active', 65, 1, 0, new Date().toISOString()
+    );
+
+    // Audit log
+    db.prepare(`INSERT INTO license_audit_log (license_id, key_prefix, user_id, event_type, event_data, actor, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      licenseId, keyPrefix, user.id, 'generated',
+      JSON.stringify({ tier: 'free', source: 'mission-control', agent_name: agent_name || null }),
+      'admin:mc', req.ip
+    );
+
+    res.json({
+      success: true,
+      licenseId,
+      keyPrefix,
+      rawKey,
+      tier: 'free',
+      email,
+      userId: user.id,
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, timestamp: Date.now() });
+  }
+});
+
+function generateKeySegment(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let segment = '';
+  for (let i = 0; i < 4; i++) {
+    segment += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return segment;
+}
+
 export default router;
