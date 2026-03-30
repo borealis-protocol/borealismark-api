@@ -40,6 +40,7 @@ import gameRouter from './routes/game';
 import auditRouter from './routes/audit';
 import licensesRouter from './routes/licenses';
 import contactRouter from './routes/contact';
+import claudeRouter from './routes/claude';
 import { cleanupExpiredInvoices } from './hedera/usdc';
 import { validateHederaConfig, logHealthCheckResults } from './hedera/healthcheck';
 import { validateStripeConfig, getStripeMode } from './stripe/mode';
@@ -233,6 +234,7 @@ app.use('/v1/game', gameRouter);
 app.use('/v1/audit', auditRouter);
 app.use('/v1/licenses', licensesRouter);
 app.use('/v1/contact',  contactRouter);
+app.use('/v1/claude',   claudeRouter);
 
 // ─── Static Files (Dashboard) ────────────────────────────────────────────────
 
