@@ -1031,8 +1031,15 @@ router.get('/public', (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
     const offset = parseInt(req.query.offset as string) || 0;
-    const agents = getPublicAgents(limit, offset);
+    const rawAgents = getPublicAgents(limit, offset);
     const total = getPublicAgentsCount();
+    // Strip internal identifiers from public responses (security: H3)
+    const INTERNAL_FIELDS = ['owner_user_id', 'registrant_key_id', 'terminated_by', 'terminated_at', 'termination_reason', 'ip_address', 'bts_key_hash'];
+    const agents = rawAgents.map(a => {
+      const safe = { ...a };
+      for (const f of INTERNAL_FIELDS) delete safe[f];
+      return safe;
+    });
     res.json({ success: true, data: agents, total, timestamp: Date.now() });
   } catch (err) {
     logger.error('Get public agents error', { error: String(err) });
