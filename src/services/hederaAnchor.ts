@@ -34,6 +34,8 @@ import {
   markEventsAnchored,
   incrementEventRetryCount,
   getFailedEventsForRetry,
+  getHcsDailyTxCount,
+  incrementHcsDailyTxCount,
 } from '../db/database';
 
 // NOTE: emit is intentionally NOT imported here. See SAFETY RULES above.
@@ -72,55 +74,60 @@ const ANCHOR_BATCH_SIZE = 200;
 // Raised from 5 min to 15 min - reduces baseline HCS tx rate by 3x.
 const ANCHOR_INTERVAL_MS = 15 * 60 * 1000;
 
-// Pause anchoring if HBAR balance drops below this threshold (in HBAR).
-// At ~0.0001 HBAR per HCS submit, 5 HBAR = ~50,000 transactions of runway.
-const HBAR_MINIMUM_BALANCE = 5;
+// ACTUAL COST: ~0.01 HBAR per HCS submit (network fee) + ~0.94 HBAR node fees
+// = ~0.95 HBAR total per transaction on mainnet. Previous comment said 0.0001 -
+// that was wrong by ~10,000x and caused the wallet to drain from 84 to 8 HBAR.
+// At 0.95 HBAR/tx, 20 HBAR gives ~21 transactions of runway.
+const HBAR_MINIMUM_BALANCE = 20;
 
-// Hard cap: abort all HCS submissions if this daily limit is hit.
-// Prevents any future runaway loop from draining the wallet in a single day.
-const MAX_DAILY_HCS_TX = 500;
+// Hard cap: reduced from 500 to 10. With ~0.95 HBAR per tx, 500 tx/day would
+// burn ~475 HBAR/day. 10 tx/day = ~9.5 HBAR/day max, which is manageable.
+const MAX_DAILY_HCS_TX = 10;
+
+// MINIMUM BATCH SIZE: Don't waste HBAR anchoring 1-2 trivial events.
+// Only submit to HCS when we have enough events to justify the ~0.95 HBAR cost.
+const MIN_BATCH_SIZE = 10;
+
+// EVENT CATEGORIES WORTH ANCHORING: Only these categories get written to Hedera.
+// Routine events (auth, system, health) are NOT worth blockchain proof.
+// They get marked as locally anchored so they don't pile up forever.
+const ANCHORABLE_CATEGORIES = new Set([
+  'audit',        // Trust score audits
+  'score',        // BTS score computations
+  'certificate',  // Audit certificates issued
+  'penalty',      // Trust deposit penalties
+  'license',      // License activation/revocation (identity events)
+  'agent',        // Agent registration/termination (identity events)
+]);
+
+// ─── MASTER SWITCH: Automatic anchoring is DISABLED until first real BTS key ─
+// Simon directive: "we don't even have BTS keys active - that is when we should
+// start the pings. right now we are still in building phase."
+//
+// Set this to true when the first real external BTS key is activated.
+// Or set env var HEDERA_ANCHORING_ENABLED=true on Render to enable remotely.
+const ANCHORING_ENABLED = process.env.HEDERA_ANCHORING_ENABLED === 'true';
 
 let anchorInterval: NodeJS.Timeout | null = null;
 
-// ─── Daily Transaction Cap ────────────────────────────────────────────────────
-
-let _dailyTxCount = 0;
-let _dailyTxDate = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
-
-function resetDailyCounterIfNeeded(): void {
-  const today = new Date().toISOString().slice(0, 10);
-  if (today !== _dailyTxDate) {
-    logger.info('Hedera daily HCS tx counter reset', {
-      previousCount: _dailyTxCount,
-      previousDate: _dailyTxDate,
-      newDate: today,
-    });
-    _dailyTxDate = today;
-    _dailyTxCount = 0;
-  }
-}
+// ─── Daily Transaction Cap (SQLite-persisted, survives restarts) ──────────────
 
 function isDailyCapExceeded(): boolean {
-  resetDailyCounterIfNeeded();
-  if (_dailyTxCount >= MAX_DAILY_HCS_TX) {
+  const count = getHcsDailyTxCount();
+  if (count >= MAX_DAILY_HCS_TX) {
     logger.warn('Hedera daily HCS tx cap exceeded - anchoring paused until midnight', {
-      count: _dailyTxCount,
+      count,
       cap: MAX_DAILY_HCS_TX,
-      date: _dailyTxDate,
+      date: new Date().toISOString().slice(0, 10),
     });
     return true;
   }
   return false;
 }
 
-function incrementDailyTxCount(): void {
-  _dailyTxCount++;
-}
-
 // Exported for health endpoint and tests
 export function getDailyTxStats(): { count: number; cap: number; date: string } {
-  resetDailyCounterIfNeeded();
-  return { count: _dailyTxCount, cap: MAX_DAILY_HCS_TX, date: _dailyTxDate };
+  return { count: getHcsDailyTxCount(), cap: MAX_DAILY_HCS_TX, date: new Date().toISOString().slice(0, 10) };
 }
 
 // ─── HBAR Balance Guard ───────────────────────────────────────────────────────
@@ -128,23 +135,43 @@ export function getDailyTxStats(): { count: number; cap: number; date: string } 
 /**
  * Check the HBAR balance of the gas wallet.
  * Returns the balance in HBAR, or null if the check fails.
- * A failed check is treated as "balance sufficient" (fail-open)
- * to avoid blocking legitimate anchoring due to transient network issues.
+ *
+ * SAFETY: Fail-CLOSED policy. If the balance check fails (SDK error,
+ * network timeout), we return false to prevent spending HBAR we can't
+ * verify we have. The daily cap provides a backstop, but fail-closed
+ * is the correct default for financial operations.
+ *
+ * Consecutive failures are tracked. After 3 consecutive balance check
+ * failures, we allow one anchoring attempt through (fail-open) to avoid
+ * permanent deadlock when Hedera mirror nodes are degraded but consensus
+ * nodes are healthy. The counter resets on any successful check.
  */
+let _consecutiveBalanceFailures = 0;
+const MAX_CONSECUTIVE_BALANCE_FAILURES = 3;
+
 async function getHbarBalance(
   accountId: string,
   config: { accountId: string; privateKey: string; network: 'testnet' | 'mainnet' },
 ): Promise<number | null> {
   try {
     const client = await _createHederaClient(config);
-    const balance = await new _AccountBalanceQuery()
-      .setAccountId(_AccountId.fromString(accountId))
-      .execute(client);
-    client.close();
-    // Hbar.toBigNumber() returns the HBAR value (not tinybars)
-    return balance.hbars.toBigNumber().toNumber();
+    try {
+      const balance = await new _AccountBalanceQuery()
+        .setAccountId(_AccountId.fromString(accountId))
+        .execute(client);
+      // Hbar.toBigNumber() returns the HBAR value (not tinybars)
+      _consecutiveBalanceFailures = 0; // Reset on success
+      return balance.hbars.toBigNumber().toNumber();
+    } finally {
+      client.close();
+    }
   } catch (err: any) {
-    logger.error('HBAR balance check failed', { accountId, error: err.message });
+    _consecutiveBalanceFailures++;
+    logger.error('HBAR balance check failed', {
+      accountId,
+      error: err.message,
+      consecutiveFailures: _consecutiveBalanceFailures,
+    });
     return null;
   }
 }
@@ -156,8 +183,22 @@ async function isBalanceSufficient(
 ): Promise<boolean> {
   const balance = await getHbarBalance(accountId, { accountId, privateKey, network });
   if (balance === null) {
-    // Check failed due to SDK/network error - do not block anchoring
-    return true;
+    // Fail-closed: block anchoring when balance is unknown.
+    // Exception: after MAX_CONSECUTIVE_BALANCE_FAILURES, allow one attempt
+    // through to prevent permanent deadlock during mirror node outages.
+    if (_consecutiveBalanceFailures >= MAX_CONSECUTIVE_BALANCE_FAILURES) {
+      logger.warn('Balance check failed repeatedly - allowing one anchoring attempt to prevent deadlock', {
+        consecutiveFailures: _consecutiveBalanceFailures,
+        maxBeforeOverride: MAX_CONSECUTIVE_BALANCE_FAILURES,
+      });
+      return true;
+    }
+    logger.warn('HBAR balance unknown - anchoring paused (fail-closed policy)', {
+      accountId,
+      consecutiveFailures: _consecutiveBalanceFailures,
+      action: 'Will retry next interval. Override after ' + MAX_CONSECUTIVE_BALANCE_FAILURES + ' consecutive failures.',
+    });
+    return false;
   }
   if (balance < HBAR_MINIMUM_BALANCE) {
     logger.warn('HBAR balance below minimum threshold - anchoring paused', {
@@ -231,16 +272,57 @@ export async function anchorEventBatch(): Promise<{
   }
   _anchoringInProgress = true;
   try {
+  // Safety guard 0: MASTER SWITCH - anchoring disabled until first real BTS key
+  if (!ANCHORING_ENABLED) {
+    // Mark all unanchored events as locally handled so they don't pile up
+    const pendingEvents = getUnanchoredEvents(ANCHOR_BATCH_SIZE);
+    if (pendingEvents.length > 0) {
+      const ids = pendingEvents.map(e => e.id);
+      markEventsAnchored(ids, `disabled:${Date.now()}`);
+      logger.debug('Anchoring disabled - marked events as locally handled', { count: pendingEvents.length });
+    }
+    return { anchored: 0, merkleRoot: null, hcsTxId: null };
+  }
+
   // Safety guard 1: daily cap
   if (isDailyCapExceeded()) {
     return { anchored: 0, merkleRoot: null, hcsTxId: null };
   }
 
-  const events = getUnanchoredEvents(ANCHOR_BATCH_SIZE);
-  if (events.length === 0) {
+  const allEvents = getUnanchoredEvents(ANCHOR_BATCH_SIZE);
+  if (allEvents.length === 0) {
     return { anchored: 0, merkleRoot: null, hcsTxId: null };
   }
 
+  // Safety guard: Category filter - only anchor events worth blockchain proof
+  const anchorableEvents = allEvents.filter(e => ANCHORABLE_CATEGORIES.has(e.category));
+  const noiseEvents = allEvents.filter(e => !ANCHORABLE_CATEGORIES.has(e.category));
+
+  // Mark noise events as locally anchored so they don't accumulate
+  if (noiseEvents.length > 0) {
+    const noiseIds = noiseEvents.map(e => e.id);
+    markEventsAnchored(noiseIds, `local-noise:${Date.now()}`);
+    logger.debug('Noise events marked locally (not worth HCS cost)', {
+      count: noiseEvents.length,
+      categories: [...new Set(noiseEvents.map(e => e.category))],
+    });
+  }
+
+  // Nothing worth anchoring on-chain
+  if (anchorableEvents.length === 0) {
+    return { anchored: noiseEvents.length, merkleRoot: null, hcsTxId: null };
+  }
+
+  // Safety guard: Minimum batch size - don't burn ~0.95 HBAR for a handful of events
+  if (anchorableEvents.length < MIN_BATCH_SIZE) {
+    logger.debug('Anchorable events below minimum batch size - deferring to next interval', {
+      count: anchorableEvents.length,
+      minBatchSize: MIN_BATCH_SIZE,
+    });
+    return { anchored: noiseEvents.length, merkleRoot: null, hcsTxId: null };
+  }
+
+  const events = anchorableEvents;
   const merkleRoot = computeMerkleRoot(events);
   const eventIds = events.map(e => e.id);
 
@@ -299,9 +381,33 @@ export async function anchorEventBatch(): Promise<{
       eventCount: events.length,
       firstEventId: eventIds[0],
       lastEventId: eventIds[eventIds.length - 1],
-      categories: [...new Set(events.map(e => e.category))],
+      categories: [...new Set(events.map(e => e.category))].slice(0, 20), // Cap categories to prevent oversized messages
       timestamp: Date.now(),
     });
+
+    // HCS message size guard (limit: 1024 bytes)
+    const messageBytes = Buffer.byteLength(message, 'utf8');
+    if (messageBytes > 1024) {
+      logger.error('HCS DATA_ANCHOR message exceeds 1KB limit - stripping categories', {
+        messageBytes,
+        eventCount: events.length,
+        categoryCount: [...new Set(events.map(e => e.category))].length,
+      });
+      // Fallback: strip categories to stay under limit
+      const fallbackMessage = JSON.stringify({
+        protocol: 'BorealisMark/1.0',
+        type: 'DATA_ANCHOR',
+        merkleRoot,
+        eventCount: events.length,
+        firstEventId: eventIds[0],
+        lastEventId: eventIds[eventIds.length - 1],
+        timestamp: Date.now(),
+      });
+      if (Buffer.byteLength(fallbackMessage, 'utf8') > 1024) {
+        logger.error('HCS message still exceeds limit after fallback - aborting', { messageBytes: Buffer.byteLength(fallbackMessage, 'utf8') });
+        return { anchored: 0, merkleRoot, hcsTxId: null };
+      }
+    }
 
     const tx = await new _TopicMessageSubmitTransaction()
       .setTopicId(_TopicId.fromString(dataTopicId))
@@ -313,7 +419,7 @@ export async function anchorEventBatch(): Promise<{
 
     // Mark all events as anchored
     markEventsAnchored(eventIds, hcsTxId);
-    incrementDailyTxCount();
+    incrementHcsDailyTxCount();
 
     // CRITICAL: Do NOT call emit() here. Emitting an ANCHOR_BATCH_COMPLETED
     // event after a successful HCS submission inserts a new platform_events
@@ -327,7 +433,7 @@ export async function anchorEventBatch(): Promise<{
       merkleRoot,
       hcsTxId,
       topicId: dataTopicId,
-      dailyTxCount: _dailyTxCount,
+      dailyTxCount: getHcsDailyTxCount(),
     });
 
     client.close();
@@ -368,6 +474,11 @@ export async function retryFailedAnchoring(): Promise<{
   succeeded: number;
   stillFailed: number;
 }> {
+  // Master switch: no Hedera calls during building phase
+  if (!ANCHORING_ENABLED) {
+    return { retried: 0, succeeded: 0, stillFailed: 0 };
+  }
+
   // Safety guard 1: daily cap
   if (isDailyCapExceeded()) {
     return { retried: 0, succeeded: 0, stillFailed: 0 };
@@ -440,14 +551,14 @@ export async function retryFailedAnchoring(): Promise<{
     // Mark all events as anchored
     markEventsAnchored(eventIds, hcsTxId);
     succeeded = failedEvents.length;
-    incrementDailyTxCount();
+    incrementHcsDailyTxCount();
 
     logger.info('Retry batch anchored to Hedera', {
       count: failedEvents.length,
       merkleRoot,
       hcsTxId,
       topicId: dataTopicId,
-      dailyTxCount: _dailyTxCount,
+      dailyTxCount: getHcsDailyTxCount(),
     });
 
     client.close();
@@ -466,6 +577,24 @@ export async function retryFailedAnchoring(): Promise<{
 // ─── Scheduled Anchoring ──────────────────────────────────────────────────────
 
 export function startAnchoringSchedule(): void {
+  if (!ANCHORING_ENABLED) {
+    logger.info('Hedera anchoring is DISABLED (building phase - no active BTS keys). Set HEDERA_ANCHORING_ENABLED=true to activate.', {
+      reason: 'No external BTS keys active yet. Anchoring wastes HBAR on noise events.',
+      howToEnable: 'Set HEDERA_ANCHORING_ENABLED=true in Render env vars when first real key activates',
+    });
+    // Still run the batch cleanup to mark noise events as locally handled
+    // so they don't pile up in the database forever, but NO Hedera calls.
+    setTimeout(() => anchorEventBatch().catch(err =>
+      logger.error('Initial cleanup batch failed', { error: err.message })
+    ), 10_000);
+    anchorInterval = setInterval(async () => {
+      try { await anchorEventBatch(); } catch (err: any) {
+        logger.error('Cleanup batch error', { error: err.message });
+      }
+    }, ANCHOR_INTERVAL_MS);
+    return;
+  }
+
   // Run once on startup after a short delay, then every 15 minutes
   setTimeout(() => anchorEventBatch().catch(err =>
     logger.error('Initial anchor batch failed', { error: err.message })
@@ -482,7 +611,9 @@ export function startAnchoringSchedule(): void {
     }
   }, ANCHOR_INTERVAL_MS);
 
-  // Retry failed submissions every 30 seconds
+  // Retry failed submissions every 5 minutes (raised from 30s to reduce
+  // resource churn during prolonged network outages - each retry creates a
+  // new Hedera client connection and balance query even on failure)
   retryInterval = setInterval(async () => {
     try {
       const result = await retryFailedAnchoring();
@@ -492,13 +623,15 @@ export function startAnchoringSchedule(): void {
     } catch (err: any) {
       logger.error('Retry batch error', { error: err.message });
     }
-  }, 30 * 1000); // 30 seconds
+  }, 5 * 60 * 1000); // 5 minutes
 
   logger.info('Hedera anchoring schedule started', {
     anchorIntervalMs: ANCHOR_INTERVAL_MS,
-    retryIntervalMs: 30000,
+    retryIntervalMs: 300000,
     maxDailyTx: MAX_DAILY_HCS_TX,
     hbarMinimumBalance: HBAR_MINIMUM_BALANCE,
+    balanceCheckPolicy: 'fail-closed (override after 3 consecutive failures)',
+    dailyCounterPersistence: 'SQLite (survives restarts)',
   });
 }
 

@@ -219,40 +219,44 @@ router.post('/audit', requireApiKey, requireScope('audit'), auditLimiter, valida
           network: networkEnv as 'testnet' | 'mainnet',
         });
 
-        if (!topicId) {
-          topicId = await createAuditTopic(hederaClient);
-          logger.info(`Created new HCS audit topic: ${topicId}. Set HEDERA_AUDIT_TOPIC_ID=${topicId} in .env`);
+        try {
+          if (!topicId) {
+            topicId = await createAuditTopic(hederaClient);
+            logger.info(`Created new HCS audit topic: ${topicId}. Set HEDERA_AUDIT_TOPIC_ID=${topicId} in .env`);
+          }
+
+          const hcsResult = await submitCertificateToHCS(hederaClient, topicId, certificate);
+
+          updateCertificateHCS(
+            certificate.auditId,
+            hcsResult.topicId,
+            hcsResult.transactionId,
+            hcsResult.sequenceNumber,
+            hcsResult.consensusTimestamp,
+          );
+
+          certificate.hcsTopicId = hcsResult.topicId;
+          certificate.hcsTransactionId = hcsResult.transactionId;
+          certificate.hcsSequenceNumber = hcsResult.sequenceNumber;
+          certificate.hcsConsensusTimestamp = hcsResult.consensusTimestamp;
+
+          logger.info('Certificate anchored on Hedera HCS', {
+            certificateId: certificate.certificateId,
+            hcsTransactionId: hcsResult.transactionId,
+            hcsSequenceNumber: hcsResult.sequenceNumber,
+          });
+
+          // Fire HCS-anchored webhook
+          emit.auditAnchored({
+            certificateId: certificate.certificateId,
+            agentId,
+            hcsTransactionId: hcsResult.transactionId,
+            hcsSequenceNumber: hcsResult.sequenceNumber,
+            hcsConsensusTimestamp: hcsResult.consensusTimestamp,
+          });
+        } finally {
+          hederaClient.close();
         }
-
-        const hcsResult = await submitCertificateToHCS(hederaClient, topicId, certificate);
-
-        updateCertificateHCS(
-          certificate.auditId,
-          hcsResult.topicId,
-          hcsResult.transactionId,
-          hcsResult.sequenceNumber,
-          hcsResult.consensusTimestamp,
-        );
-
-        certificate.hcsTopicId = hcsResult.topicId;
-        certificate.hcsTransactionId = hcsResult.transactionId;
-        certificate.hcsSequenceNumber = hcsResult.sequenceNumber;
-        certificate.hcsConsensusTimestamp = hcsResult.consensusTimestamp;
-
-        logger.info('Certificate anchored on Hedera HCS', {
-          certificateId: certificate.certificateId,
-          hcsTransactionId: hcsResult.transactionId,
-          hcsSequenceNumber: hcsResult.sequenceNumber,
-        });
-
-        // Fire HCS-anchored webhook
-        emit.auditAnchored({
-          certificateId: certificate.certificateId,
-          agentId,
-          hcsTransactionId: hcsResult.transactionId,
-          hcsSequenceNumber: hcsResult.sequenceNumber,
-          hcsConsensusTimestamp: hcsResult.consensusTimestamp,
-        });
 
       } catch (hcsErr) {
         logger.warn('HCS submission failed (certificate still valid)', {
@@ -748,13 +752,17 @@ router.post('/my/:id/audit', requireAuth, auditLimiter, async (req, res) => {
         }
 
         const hederaClient = await createHederaClient({ accountId, privateKey, network: networkEnv as 'testnet' | 'mainnet' });
-        if (!topicId) topicId = await createAuditTopic(hederaClient);
-        const hcsResult = await submitCertificateToHCS(hederaClient, topicId, certificate);
-        updateCertificateHCS(certificate.auditId, hcsResult.topicId, hcsResult.transactionId, hcsResult.sequenceNumber, hcsResult.consensusTimestamp);
-        certificate.hcsTopicId = hcsResult.topicId;
-        certificate.hcsTransactionId = hcsResult.transactionId;
-        certificate.hcsSequenceNumber = hcsResult.sequenceNumber;
-        certificate.hcsConsensusTimestamp = hcsResult.consensusTimestamp;
+        try {
+          if (!topicId) topicId = await createAuditTopic(hederaClient);
+          const hcsResult = await submitCertificateToHCS(hederaClient, topicId, certificate);
+          updateCertificateHCS(certificate.auditId, hcsResult.topicId, hcsResult.transactionId, hcsResult.sequenceNumber, hcsResult.consensusTimestamp);
+          certificate.hcsTopicId = hcsResult.topicId;
+          certificate.hcsTransactionId = hcsResult.transactionId;
+          certificate.hcsSequenceNumber = hcsResult.sequenceNumber;
+          certificate.hcsConsensusTimestamp = hcsResult.consensusTimestamp;
+        } finally {
+          hederaClient.close();
+        }
       } catch (hcsErr) {
         logger.warn('Dashboard audit HCS submission failed', { error: String(hcsErr) });
       }
@@ -917,35 +925,37 @@ router.post('/audit/:auditRequestId/accept', requireApiKey, requireScope('audit'
           network: networkEnv as 'testnet' | 'mainnet',
         });
 
-        if (!topicId) {
-          topicId = await createAuditTopic(hederaClient);
-          logger.info(`Created new HCS audit topic: ${topicId}. Set HEDERA_AUDIT_TOPIC_ID=${topicId} in .env`);
+        try {
+          if (!topicId) {
+            topicId = await createAuditTopic(hederaClient);
+            logger.info(`Created new HCS audit topic: ${topicId}. Set HEDERA_AUDIT_TOPIC_ID=${topicId} in .env`);
+          }
+
+          const message = JSON.stringify({
+            protocol: 'BorealisMark/1.0',
+            type: 'AUDIT_COMMITMENT',
+            auditRequestId,
+            certificateId: certificate.certificateId,
+            agentId,
+            requesterKeyId: auditRequest.requester_key_id,
+            agentOwnerSignature: signature,
+            issuedAt: certificate.issuedAt,
+          });
+
+          const { TopicMessageSubmitTransaction, TopicId } = await import('@hashgraph/sdk');
+          const tx = await new TopicMessageSubmitTransaction()
+            .setTopicId(TopicId.fromString(topicId))
+            .setMessage(message)
+            .execute(hederaClient);
+
+          const receipt = await tx.getReceipt(hederaClient);
+          logger.info('Audit commitment anchored on HCS', {
+            auditRequestId,
+            certificateId: certificate.certificateId,
+          });
+        } finally {
+          hederaClient.close();
         }
-
-        const message = JSON.stringify({
-          protocol: 'BorealisMark/1.0',
-          type: 'AUDIT_COMMITMENT',
-          auditRequestId,
-          certificateId: certificate.certificateId,
-          agentId,
-          requesterKeyId: auditRequest.requester_key_id,
-          agentOwnerSignature: signature,
-          issuedAt: certificate.issuedAt,
-        });
-
-        const { TopicMessageSubmitTransaction, TopicId } = await import('@hashgraph/sdk');
-        const tx = await new TopicMessageSubmitTransaction()
-          .setTopicId(TopicId.fromString(topicId))
-          .setMessage(message)
-          .execute(hederaClient);
-
-        const receipt = await tx.getReceipt(hederaClient);
-        logger.info('Audit commitment anchored on HCS', {
-          auditRequestId,
-          certificateId: certificate.certificateId,
-        });
-
-        hederaClient.close();
       } catch (hcsErr) {
         logger.warn('HCS commitment submission failed', {
           error: String(hcsErr),

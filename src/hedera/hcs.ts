@@ -155,7 +155,10 @@ export async function submitCertificateToHCS(
     topicId,
     transactionId: tx.transactionId.toString(),
     sequenceNumber: receipt.topicSequenceNumber.toNumber(),
-    consensusTimestamp: record.consensusTimestamp?.toDate().toISOString() ?? new Date().toISOString(),
+    // SAFETY: Never substitute a local timestamp for a consensus timestamp.
+    // A null value is honest; a local time pretending to be consensus time
+    // breaks the immutability guarantee that makes HCS anchoring meaningful.
+    consensusTimestamp: record.consensusTimestamp?.toDate().toISOString() ?? '',
   };
 }
 
@@ -197,7 +200,7 @@ export async function submitPenaltyEventToHCS(
     topicId,
     transactionId: tx.transactionId.toString(),
     sequenceNumber: receipt.topicSequenceNumber?.toNumber() ?? 0,
-    consensusTimestamp: record.consensusTimestamp?.toDate().toISOString() ?? new Date().toISOString(),
+    consensusTimestamp: record.consensusTimestamp?.toDate().toISOString() ?? '',
   };
 }
 
@@ -236,6 +239,6 @@ export async function submitSlashEventToHCS(
     topicId,
     transactionId: tx.transactionId.toString(),
     sequenceNumber: receipt.topicSequenceNumber?.toNumber() ?? 0,
-    consensusTimestamp: record.consensusTimestamp?.toDate().toISOString() ?? new Date().toISOString(),
+    consensusTimestamp: record.consensusTimestamp?.toDate().toISOString() ?? '',
   };
 }

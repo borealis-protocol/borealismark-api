@@ -96,7 +96,7 @@ async function anchorScoreToHCS(
 
   try {
     const { createHederaClient } = await import('../hedera/hcs');
-    const { TopicMessageSubmitTransaction, TopicId } = await import('@hashgraph/sdk');
+    const { TopicMessageSubmitTransaction, TopicId, AccountBalanceQuery, AccountId } = await import('@hashgraph/sdk');
 
     const client = await createHederaClient({
       accountId,
@@ -104,34 +104,57 @@ async function anchorScoreToHCS(
       network: network as 'testnet' | 'mainnet',
     });
 
-    const message = JSON.stringify({
-      protocol: 'BorealisMark/1.0',
-      type: 'BTS_SCORE',
-      scoreId,
-      agentId,
-      score,
-      creditRating,
-      batchHash,
-      reportingMode,
-      timestamp: Date.now(),
-    });
+    try {
+      // Balance check before spending HBAR (fail-closed)
+      const balance = await new AccountBalanceQuery()
+        .setAccountId(AccountId.fromString(accountId))
+        .execute(client);
+      const hbarBalance = balance.hbars.toBigNumber().toNumber();
+      if (hbarBalance < 5) {
+        logger.warn('HBAR balance too low for score anchoring - skipping', {
+          scoreId, balanceHbar: hbarBalance,
+        });
+        return null;
+      }
 
-    const tx = await new TopicMessageSubmitTransaction()
-      .setTopicId(TopicId.fromString(dataTopicId))
-      .setMessage(message)
-      .execute(client);
+      const message = JSON.stringify({
+        protocol: 'BorealisMark/1.0',
+        type: 'BTS_SCORE',
+        scoreId,
+        agentId,
+        score,
+        creditRating,
+        batchHash,
+        reportingMode,
+        timestamp: Date.now(),
+      });
 
-    const receipt = await tx.getReceipt(client);
-    const record = await tx.getRecord(client);
+      // Message size guard (HCS limit: 1024 bytes)
+      const messageBytes = Buffer.byteLength(message, 'utf8');
+      if (messageBytes > 1024) {
+        logger.warn('HCS message exceeds 1KB limit - skipping anchoring', {
+          scoreId, messageBytes,
+        });
+        return null;
+      }
 
-    client.close();
+      const tx = await new TopicMessageSubmitTransaction()
+        .setTopicId(TopicId.fromString(dataTopicId))
+        .setMessage(message)
+        .execute(client);
 
-    return {
-      topicId: dataTopicId,
-      transactionId: tx.transactionId.toString(),
-      sequenceNumber: receipt.topicSequenceNumber?.toNumber() ?? 0,
-      consensusTimestamp: record.consensusTimestamp?.toDate().toISOString() ?? new Date().toISOString(),
-    };
+      const receipt = await tx.getReceipt(client);
+      const record = await tx.getRecord(client);
+
+      return {
+        topicId: dataTopicId,
+        transactionId: tx.transactionId.toString(),
+        sequenceNumber: receipt.topicSequenceNumber?.toNumber() ?? 0,
+        consensusTimestamp: record.consensusTimestamp?.toDate().toISOString() ?? null,
+      };
+    } finally {
+      client.close();
+    }
   } catch (err: any) {
     logger.error('HCS score anchoring failed', { scoreId, error: err.message });
     return null;

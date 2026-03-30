@@ -5,7 +5,7 @@ import { requireApiKey, requireScope } from '../middleware/auth';
 import { validateBody } from '../middleware/validate';
 import { slashLimiter } from '../middleware/rateLimiter';
 import { logger, auditLog } from '../middleware/logger';
-import { createTrustDeposit, getActiveTrustDeposit, recordPenalty } from '../db/database';
+import { createTrustDeposit, getActiveTrustDeposit, recordPenalty, getRecentPenalty, getTotalForfeited } from '../db/database';
 import { createHederaClient, submitPenaltyEventToHCS } from '../hedera/hcs';
 import { emit } from '../engine/webhook-dispatcher';
 import type { PenaltyEvent, TrustTier } from '../engine/types';
@@ -130,8 +130,20 @@ router.post('/penalize', requireApiKey, requireScope('audit'), slashLimiter, val
   }
 
   // Cooldown: prevent multiple penalties within 24 hours on same agent
-  // TODO: Query penalty_events table for agent_id with executed_at > now - 24h
-  // For now, this is documented but requires database query implementation
+  const recentPenalty = getRecentPenalty(agentId);
+  if (recentPenalty) {
+    const lastPenaltyAt = recentPenalty.executed_at as number;
+    const cooldownEndsAt = lastPenaltyAt + 24 * 60 * 60 * 1000;
+    const hoursRemaining = Math.ceil((cooldownEndsAt - Date.now()) / (60 * 60 * 1000));
+    res.status(429).json({
+      success: false,
+      error: `Penalty cooldown active. Agent was penalized within the last 24 hours. Cooldown expires in ~${hoursRemaining}h.`,
+      lastPenaltyId: recentPenalty.id,
+      cooldownEndsAt,
+      timestamp: Date.now(),
+    });
+    return;
+  }
 
   // Enforce severity-based penalty caps to prevent excessive penalties
   const maxPenaltyRatio = SEVERITY_CAPS[violationType] ?? 0.50;
@@ -147,8 +159,19 @@ router.post('/penalize', requireApiKey, requireScope('audit'), slashLimiter, val
 
   // Track total forfeited: don't allow total forfeited to exceed original deposit amount
   // This prevents infinite penalties and ensures proportional enforcement
-  // TODO: Query penalty_events table for agent_id and sum amount_forfeited
-  // Validate: sum(amount_forfeited) + amountForfeited <= depositAmount
+  const totalPreviouslyForfeited = getTotalForfeited(deposit.id as string);
+  if (totalPreviouslyForfeited + amountForfeited > depositAmount) {
+    const remaining = Math.max(0, depositAmount - totalPreviouslyForfeited);
+    res.status(400).json({
+      success: false,
+      error: `Cumulative forfeiture would exceed deposit. ${totalPreviouslyForfeited} USDC already forfeited from ${depositAmount} USDC deposit. Maximum additional penalty: ${remaining} USDC.`,
+      totalForfeited: totalPreviouslyForfeited,
+      depositAmount,
+      maxAdditionalPenalty: remaining,
+      timestamp: Date.now(),
+    });
+    return;
+  }
 
   const penaltyId = uuidv4();
   let hcsTxId: string | undefined;
@@ -180,12 +203,16 @@ router.post('/penalize', requireApiKey, requireScope('audit'), slashLimiter, val
         network: networkEnv as 'testnet' | 'mainnet',
       });
 
-      const hcsResult = await submitPenaltyEventToHCS(hederaClient, topicId, penaltyEvent);
-      hcsTxId = hcsResult.transactionId;
+      try {
+        const hcsResult = await submitPenaltyEventToHCS(hederaClient, topicId, penaltyEvent);
+        hcsTxId = hcsResult.transactionId;
 
-      logger.info('Penalty event anchored on Hedera HCS', {
-        penaltyId, agentId, hcsTransactionId: hcsTxId,
-      });
+        logger.info('Penalty event anchored on Hedera HCS', {
+          penaltyId, agentId, hcsTransactionId: hcsTxId,
+        });
+      } finally {
+        hederaClient.close();
+      }
     } catch (hcsErr) {
       logger.warn('Penalty HCS submission failed', {
         error: String(hcsErr), penaltyId, agentId,
