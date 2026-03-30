@@ -847,8 +847,22 @@ router.post('/licenses/generate-free', requireAuth, requireAdmin, (req: Request,
 
     const crypto = require('crypto');
 
-    // Check if user exists, create if not
+    // Check for existing free key for this email (warn, don't block - admin override)
     let user = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
+    if (user) {
+      const existingFree = db.prepare('SELECT id, key_prefix, status FROM licenses WHERE user_id = ? AND license_tier = ?').get(user.id, 'free') as any;
+      if (existingFree && !req.body.force) {
+        res.status(409).json({
+          success: false,
+          error: `This email already has a free key (${existingFree.key_prefix}••••, status: ${existingFree.status}). Send force: true to override.`,
+          existingKeyPrefix: existingFree.key_prefix,
+          existingStatus: existingFree.status,
+        });
+        return;
+      }
+    }
+
+    // Create user if not exists
     if (!user) {
       const userId = crypto.randomUUID();
       db.prepare('INSERT INTO users (id, name, email, role, created_at) VALUES (?, ?, ?, ?, ?)').run(
@@ -891,10 +905,12 @@ router.post('/licenses/generate-free', requireAuth, requireAdmin, (req: Request,
 });
 
 function generateKeySegment(): string {
+  const crypto = require('crypto');
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(4);
   let segment = '';
   for (let i = 0; i < 4; i++) {
-    segment += chars[Math.floor(Math.random() * chars.length)];
+    segment += chars[bytes[i] % chars.length];
   }
   return segment;
 }

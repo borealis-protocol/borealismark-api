@@ -41,17 +41,15 @@ const router = Router();
 
 const JWT_SECRET = (() => {
   const secret = process.env.JWT_SECRET;
-  if (process.env.NODE_ENV === 'production') {
-    if (!secret || secret === 'borealismark-jwt-dev-secret-change-me') {
-      logger.error('FATAL: JWT_SECRET must be set to a secure value in production');
-      process.exit(1);
-    }
-  } else {
-    if (!secret) {
-      logger.warn('Using default JWT secret — set JWT_SECRET env var for production');
-    }
+  if (!secret) {
+    logger.error('FATAL: JWT_SECRET environment variable is not set. Server cannot start without it.');
+    process.exit(1);
   }
-  return secret ?? 'borealismark-jwt-dev-secret-change-me';
+  if (secret.length < 32) {
+    logger.error('FATAL: JWT_SECRET must be at least 32 characters for security.');
+    process.exit(1);
+  }
+  return secret;
 })();
 const JWT_EXPIRES_IN = '24h';
 const JWT_REFRESH_WINDOW = 2 * 60 * 60 * 1000; // last 2 hours — eligible for refresh

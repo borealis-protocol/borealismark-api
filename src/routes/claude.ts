@@ -12,7 +12,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
-import { getDb } from '../middleware/database';
+import { getDb } from '../db/database';
 
 const router = Router();
 
