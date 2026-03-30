@@ -560,6 +560,15 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_events_created ON platform_events(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_events_anchored ON platform_events(anchored);
 
+    -- ── HCS Daily Transaction Counter (persistent across restarts) ──────────────
+    -- Tracks daily HCS transaction count to enforce the hard cap even if
+    -- the server restarts mid-day (prevents cap bypass on Render free tier).
+    CREATE TABLE IF NOT EXISTS hcs_daily_stats (
+      date TEXT PRIMARY KEY,
+      tx_count INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+
     -- ── Audit Requests (mutual commitment protocol) ────────────────────────────
     CREATE TABLE IF NOT EXISTS audit_requests (
       id TEXT PRIMARY KEY,
@@ -2324,6 +2333,25 @@ function initSchema(db: Database.Database): void {
       }
     }
   }
+
+  // ── Sidecar Verification MVP — add trust_source tracking to agents table ──────
+  // The sidecar verification workflow upgrades an agent's trust_source from 'bts'
+  // (self-reported) to 'sidecar-verified' (independently confirmed by ARBITER +
+  // MAGISTRATE). This column stores the verification state directly instead of
+  // computing it only from audit_certificates.
+  {
+    const agentColsSidecar = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+    const colNames = agentColsSidecar.map(c => c.name);
+
+    if (!colNames.includes('sidecar_verified_at')) {
+      db.exec("ALTER TABLE agents ADD COLUMN sidecar_verified_at INTEGER DEFAULT NULL");
+      logger.info('Migrated agents: added sidecar_verified_at column');
+    }
+    if (!colNames.includes('sidecar_attestation')) {
+      db.exec("ALTER TABLE agents ADD COLUMN sidecar_attestation TEXT DEFAULT NULL");
+      logger.info('Migrated agents: added sidecar_attestation column (JSON attestation record)');
+    }
+  }
 }
 
 // ─── User Queries ─────────────────────────────────────────────────────────────
@@ -3026,7 +3054,11 @@ export function getPublicAgents(limit: number = 50, offset: number = 0): Record<
               COALESCE(ac.credit_rating, a.bts_credit_rating) AS credit_rating,
               ac.certificate_id,
               ac.issued_at AS last_audit_at,
-              CASE WHEN ac.certificate_id IS NOT NULL THEN 'audited' ELSE 'bts' END AS trust_source
+              CASE
+                WHEN a.sidecar_verified_at IS NOT NULL THEN 'sidecar-verified'
+                WHEN ac.certificate_id IS NOT NULL THEN 'audited'
+                ELSE 'bts'
+              END AS trust_source
        FROM agents a
        LEFT JOIN (
          SELECT agent_id, score_total, credit_rating, certificate_id, issued_at,
@@ -3179,6 +3211,29 @@ export function recordPenalty(
     )
     .run(id, depositId, agentId, violationType, amountForfeited, 'PROTOCOL_TREASURY', Date.now(), hcsTransactionId ?? null);
   getDb().prepare('UPDATE stakes SET active = 0 WHERE id = ?').run(depositId);
+}
+
+/**
+ * Check if an agent has been penalized within the cooldown window.
+ * Returns the most recent penalty within the window, or undefined if none.
+ * Used to enforce the 24-hour penalty cooldown.
+ */
+export function getRecentPenalty(agentId: string, cooldownMs: number = 24 * 60 * 60 * 1000): Record<string, unknown> | undefined {
+  const cutoff = Date.now() - cooldownMs;
+  return getDb()
+    .prepare('SELECT * FROM slash_events WHERE agent_id = ? AND executed_at > ? ORDER BY executed_at DESC LIMIT 1')
+    .get(agentId, cutoff) as Record<string, unknown> | undefined;
+}
+
+/**
+ * Get total amount forfeited for an agent's current deposit.
+ * Used to prevent cumulative penalties from exceeding the original deposit.
+ */
+export function getTotalForfeited(depositId: string): number {
+  const result = getDb()
+    .prepare('SELECT COALESCE(SUM(amount_slashed), 0) as total FROM slash_events WHERE stake_id = ?')
+    .get(depositId) as { total: number } | undefined;
+  return result?.total ?? 0;
 }
 
 // ─── Backward Compatibility Aliases ──────────────────────────────────────────
@@ -4633,6 +4688,35 @@ export function insertPlatformEvent(event: {
     JSON.stringify(event.metadata ?? {}),
     Date.now(),
   );
+}
+
+// ─── HCS Daily Stats (persistent tx counter) ────────────────────────────────
+
+/**
+ * Get today's HCS transaction count from the database.
+ * Returns 0 if no record exists for today.
+ */
+export function getHcsDailyTxCount(): number {
+  const today = new Date().toISOString().slice(0, 10);
+  const row = getDb()
+    .prepare('SELECT tx_count FROM hcs_daily_stats WHERE date = ?')
+    .get(today) as { tx_count: number } | undefined;
+  return row?.tx_count ?? 0;
+}
+
+/**
+ * Increment today's HCS transaction count in the database.
+ * Creates the row if it doesn't exist (UPSERT).
+ */
+export function incrementHcsDailyTxCount(): number {
+  const today = new Date().toISOString().slice(0, 10);
+  const now = Date.now();
+  getDb().prepare(`
+    INSERT INTO hcs_daily_stats (date, tx_count, updated_at)
+    VALUES (?, 1, ?)
+    ON CONFLICT(date) DO UPDATE SET tx_count = tx_count + 1, updated_at = ?
+  `).run(today, now, now);
+  return getHcsDailyTxCount();
 }
 
 export function getUnanchoredEvents(limit: number = 100): Record<string, any>[] {
