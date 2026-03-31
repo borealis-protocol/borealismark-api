@@ -42,6 +42,7 @@ import licensesRouter from './routes/licenses';
 import contactRouter from './routes/contact';
 import claudeRouter from './routes/claude';
 import sidecarRouter from './routes/sidecar';
+import brainRouter from './routes/brain';
 import { cleanupExpiredInvoices } from './hedera/usdc';
 import { validateHederaConfig, logHealthCheckResults } from './hedera/healthcheck';
 import { validateStripeConfig, getStripeMode } from './stripe/mode';
@@ -238,6 +239,7 @@ app.use('/v1/licenses', licensesRouter);
 app.use('/v1/contact',  contactRouter);
 app.use('/v1/claude',   claudeRouter);
 app.use('/v1/sidecar',  sidecarRouter);
+app.use('/v1/brain',    brainRouter);
 
 // ─── Static Files (Dashboard) ────────────────────────────────────────────────
 
