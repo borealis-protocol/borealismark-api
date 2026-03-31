@@ -178,6 +178,40 @@ function brainError(res: Response, code: string, message: string, status: number
   });
 }
 
+// ─── Auto-Link Helper ────────────────────────────────────────────────────────
+
+function runAutoLink(db: ReturnType<typeof getDb>, noteId: string, userId: string): void {
+  const newTags = getTagsForNote(db, noteId);
+  if (newTags.length === 0) return;
+
+  const placeholders = newTags.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT bt.note_id, COUNT(*) as match_count
+    FROM brain_tags bt
+    JOIN brain_notes bn ON bt.note_id = bn.id
+    WHERE bt.tag IN (${placeholders})
+      AND bn.user_id = ?
+      AND bt.note_id != ?
+    GROUP BY bt.note_id
+    HAVING match_count >= 2
+  `).all(...newTags, userId, noteId) as { note_id: string; match_count: number }[];
+
+  if (rows.length === 0) return;
+
+  const insertLink = db.prepare(
+    'INSERT OR IGNORE INTO brain_links (id, source_note_id, target_note_id, created_by) VALUES (?, ?, ?, ?)'
+  );
+
+  const linkAll = db.transaction(() => {
+    for (const row of rows) {
+      insertLink.run(uuidv4(), noteId, row.note_id, 'system_autolink');
+    }
+  });
+  linkAll();
+
+  logger.info('Brain: auto-linked note', { noteId, linkedTo: rows.length });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // NOTES CRUD
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -325,6 +359,9 @@ router.post('/notes', requireAuth, (req: Request, res: Response) => {
       insertTags(db, noteId, tags);
     }
 
+    // Auto-link: find notes with 2+ matching tags
+    runAutoLink(db, noteId, userId);
+
     const created = db.prepare('SELECT * FROM brain_notes WHERE id = ?').get(noteId) as any;
 
     res.status(201).json({
@@ -399,6 +436,9 @@ router.post('/notes/agent', requireApiKey, requireScope('write'), (req: Request,
       insertTags(db, noteId, tags);
     }
 
+    // Auto-link: find notes with 2+ matching tags
+    runAutoLink(db, noteId, userId);
+
     const created = db.prepare('SELECT * FROM brain_notes WHERE id = ?').get(noteId) as any;
 
     logger.info('Brain: agent created note', { noteId, agentId: created_by_id, pillar, userId });
@@ -417,6 +457,95 @@ router.post('/notes/agent', requireApiKey, requireScope('write'), (req: Request,
   } catch (err: any) {
     logger.error('Brain: agent failed to create note', { error: err.message });
     res.status(500).json({ success: false, error: 'Failed to create agent note', timestamp: Date.now() });
+  }
+});
+
+// ─── POST /notes/intel-feed - Intelligence Feed batch deposit ────────────────
+
+router.post('/notes/intel-feed', requireApiKey, requireScope('write'), (req: Request, res: Response) => {
+  try {
+    const authReq = req as AuthenticatedRequest;
+
+    const BatchSchema = z.object({
+      notes: z.array(z.object({
+        title: z.string().min(1).max(MAX_TITLE_LENGTH),
+        body: z.string().max(MAX_BODY_LENGTH).optional().default(''),
+        tags: z.array(z.string().max(MAX_TAG_LENGTH)).max(MAX_TAGS_PER_NOTE).optional().default([]),
+        classification: z.enum(['STRATEGIC', 'TACTICAL', 'AWARENESS', 'ALERT']).optional(),
+      })).min(1).max(50),
+      target_user_id: z.string().optional(),
+    });
+
+    const parsed = BatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return brainError(res, 'BRAIN_VALIDATION_ERROR', parsed.error.errors.map(e => e.message).join(', '), 400);
+    }
+
+    // Rate limit: use the API key id
+    if (!checkAgentRateLimit(authReq.apiKey.id)) {
+      res.setHeader('Retry-After', '86400');
+      return brainError(res, 'BRAIN_RATE_LIMIT', 'Rate limit exceeded - 100 notes per 24 hours', 429);
+    }
+
+    const db = getDb();
+
+    // Resolve the target user - use target_user_id if provided, else key owner
+    let userId: string;
+    if (parsed.data.target_user_id) {
+      const user = db.prepare('SELECT id FROM users WHERE id = ?').get(parsed.data.target_user_id) as any;
+      if (!user) {
+        return brainError(res, 'BRAIN_USER_NOT_FOUND', 'Target user not found', 404);
+      }
+      userId = parsed.data.target_user_id;
+    } else {
+      // Use the first user associated with this API key
+      const keyRow = db.prepare('SELECT user_id FROM api_keys WHERE id = ?').get(authReq.apiKey.id) as any;
+      if (!keyRow) {
+        return brainError(res, 'BRAIN_UNAUTHORIZED', 'Cannot determine target user for intel feed', 403);
+      }
+      userId = keyRow.user_id;
+    }
+
+    ensureBrainSeeded(userId);
+
+    const created: any[] = [];
+
+    const insertBatch = db.transaction(() => {
+      for (const item of parsed.data.notes) {
+        const noteId = uuidv4();
+        const allTags = [...item.tags];
+        if (item.classification) {
+          allTags.push(item.classification.toLowerCase());
+        }
+        allTags.push('intel-feed');
+
+        db.prepare(`
+          INSERT INTO brain_notes (id, user_id, pillar, title, body, created_by_type, created_by_id, is_pillar_root)
+          VALUES (?, ?, 'intelligence', ?, ?, 'agent', 'system_intel_feed', 0)
+        `).run(noteId, userId, item.title, item.body);
+
+        insertTags(db, noteId, allTags);
+        runAutoLink(db, noteId, userId);
+
+        created.push({ id: noteId, title: item.title, tags: getTagsForNote(db, noteId) });
+      }
+    });
+
+    insertBatch();
+
+    logger.info('Brain: intel feed batch deposited', { count: created.length, userId });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        created: created.length,
+        notes: created,
+      },
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    logger.error('Brain: intel feed failed', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to process intel feed', timestamp: Date.now() });
   }
 });
 
