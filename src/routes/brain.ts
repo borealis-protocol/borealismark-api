@@ -367,26 +367,26 @@ router.post('/notes/agent', requireApiKey, requireScope('write'), (req: Request,
       return brainError(res, 'BRAIN_VALIDATION_ERROR', 'Agent notes require created_by_type: "agent" and created_by_id', 400);
     }
 
-    // Look up the agent to find its owner (user_id)
+    // Look up the agent to verify ownership
     const db = getDb();
     const agent = db.prepare(
-      'SELECT id, registrant_key_id FROM agents WHERE id = ?'
+      'SELECT id, registrant_key_id, owner_user_id FROM agents WHERE id = ?'
     ).get(created_by_id) as any;
 
     if (!agent) {
-      return brainError(res, 'BRAIN_NOTE_NOT_FOUND', 'Agent not found', 404);
+      return brainError(res, 'BRAIN_AGENT_NOT_FOUND', 'Agent not found', 404);
     }
 
-    // Find the user who owns this API key
-    const apiKeyRecord = db.prepare(
-      'SELECT user_id FROM api_keys WHERE id = ?'
-    ).get(authReq.apiKey.id) as any;
-
-    if (!apiKeyRecord) {
-      return brainError(res, 'BRAIN_UNAUTHORIZED', 'Cannot resolve API key owner', 401);
+    // Verify the API key matches the agent's registrant key
+    if (agent.registrant_key_id !== authReq.apiKey.id) {
+      return brainError(res, 'BRAIN_UNAUTHORIZED', 'API key does not own this agent', 403);
     }
 
-    const userId = apiKeyRecord.user_id;
+    if (!agent.owner_user_id) {
+      return brainError(res, 'BRAIN_UNAUTHORIZED', 'Agent has no owner - cannot write to Brain', 403);
+    }
+
+    const userId = agent.owner_user_id as string;
     ensureBrainSeeded(userId);
 
     const noteId = uuidv4();
