@@ -36,15 +36,11 @@ router.post('/write', async (req: Request, res: Response) => {
     }
 
     const { text, format, tone } = parsed.data;
-    const apiKey = process.env.ANTHROPIC_API_KEY || process.env.OPENROUTER_API_KEY;
 
-    if (!apiKey) {
+    if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENROUTER_API_KEY) {
       res.status(503).json({ success: false, error: 'AI service not configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY.' });
       return;
     }
-
-    const isOpenRouter = !process.env.ANTHROPIC_API_KEY && !!process.env.OPENROUTER_API_KEY;
-    const baseURL = isOpenRouter ? 'https://openrouter.ai/api/v1' : 'https://api.anthropic.com/v1';
 
     const systemPrompt = `You are a writing assistant. Your job is to take rough, unpolished text and transform it into clear, well-written content.
 
@@ -58,17 +54,17 @@ Rules:
 - Do NOT add placeholder text like [Your Name] unless the format requires it.
 - Output ONLY the polished text. No explanations, no commentary.`;
 
-    let result: string;
+    let result: string = '';
 
-    if (isOpenRouter) {
-      // OpenRouter (OpenAI-compatible)
-      const response = await fetch(`${baseURL}/chat/completions`, {
+    // Helper: call OpenRouter
+    async function callOpenRouter(orKey: string): Promise<string> {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${apiKey}`,
+          'Authorization': `Bearer ${orKey}`,
           'Content-Type': 'application/json',
           'HTTP-Referer': 'https://borealisprotocol.ai',
-          'X-Title': 'Borealis Writer',
+          'X-Title': 'Borealis Boardroom',
         },
         body: JSON.stringify({
           model: 'anthropic/claude-sonnet-4',
@@ -80,21 +76,21 @@ Rules:
           temperature: 0.3,
         }),
       });
-
       if (!response.ok) {
         const err = await response.text();
         logger.error('OpenRouter error', { status: response.status, body: err });
-        throw new Error('AI service error');
+        throw new Error('OpenRouter error');
       }
-
       const data = await response.json();
-      result = data.choices?.[0]?.message?.content || '';
-    } else {
-      // Native Anthropic API
-      const response = await fetch(`${baseURL}/messages`, {
+      return data.choices?.[0]?.message?.content || '';
+    }
+
+    // Helper: call Anthropic native
+    async function callAnthropic(aKey: string): Promise<string> {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
-          'x-api-key': apiKey,
+          'x-api-key': aKey,
           'anthropic-version': '2023-06-01',
           'Content-Type': 'application/json',
         },
@@ -108,15 +104,34 @@ Rules:
           ],
         }),
       });
-
       if (!response.ok) {
         const err = await response.text();
         logger.error('Anthropic error', { status: response.status, body: err });
-        throw new Error('AI service error');
+        throw new Error('Anthropic error');
       }
-
       const data = await response.json();
-      result = data.content?.[0]?.text || '';
+      return data.content?.[0]?.text || '';
+    }
+
+    // Try Anthropic first, fall back to OpenRouter on any failure
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+
+    if (anthropicKey) {
+      try {
+        result = await callAnthropic(anthropicKey);
+      } catch (e: any) {
+        logger.warn('Anthropic failed, falling back to OpenRouter', { error: e.message });
+        if (openRouterKey) {
+          result = await callOpenRouter(openRouterKey);
+        } else {
+          throw new Error('AI service unavailable');
+        }
+      }
+    } else if (openRouterKey) {
+      result = await callOpenRouter(openRouterKey);
+    } else {
+      throw new Error('No AI provider configured');
     }
 
     if (!result) throw new Error('Empty response from AI');
