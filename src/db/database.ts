@@ -2343,13 +2343,42 @@ function initSchema(db: Database.Database): void {
     const agentColsAegis = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
     const colNames = agentColsAegis.map(c => c.name);
 
-    if (!colNames.includes('aegis_verified_at')) {
+    // ── Migration: rename sidecar_* columns to aegis_* (one-time) ─────────
+    // The Render DB may still have the old sidecar_verified_at / sidecar_attestation
+    // columns from the pre-rename era. Rename them in-place so data is preserved.
+    if (colNames.includes('sidecar_verified_at') && !colNames.includes('aegis_verified_at')) {
+      db.exec("ALTER TABLE agents RENAME COLUMN sidecar_verified_at TO aegis_verified_at");
+      logger.info('Migrated agents: renamed sidecar_verified_at -> aegis_verified_at');
+    }
+    if (colNames.includes('sidecar_attestation') && !colNames.includes('aegis_attestation')) {
+      db.exec("ALTER TABLE agents RENAME COLUMN sidecar_attestation TO aegis_attestation");
+      logger.info('Migrated agents: renamed sidecar_attestation -> aegis_attestation');
+    }
+
+    // Fresh install path - add columns if neither old nor new exist
+    if (!colNames.includes('aegis_verified_at') && !colNames.includes('sidecar_verified_at')) {
       db.exec("ALTER TABLE agents ADD COLUMN aegis_verified_at INTEGER DEFAULT NULL");
       logger.info('Migrated agents: added aegis_verified_at column');
     }
-    if (!colNames.includes('aegis_attestation')) {
+    if (!colNames.includes('aegis_attestation') && !colNames.includes('sidecar_attestation')) {
       db.exec("ALTER TABLE agents ADD COLUMN aegis_attestation TEXT DEFAULT NULL");
       logger.info('Migrated agents: added aegis_attestation column (JSON attestation record)');
+    }
+  }
+
+  // ── Migration: rename sidecar_requests table to aegis_requests (one-time) ──
+  {
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
+    const tableNames = tables.map(t => t.name);
+    if (tableNames.includes('sidecar_requests') && !tableNames.includes('aegis_requests')) {
+      db.exec("ALTER TABLE sidecar_requests RENAME TO aegis_requests");
+      // Also rename indexes - SQLite auto-renames them with the table, but
+      // the old index names may persist. Drop old, create new.
+      db.exec("DROP INDEX IF EXISTS idx_sidecar_req_agent");
+      db.exec("DROP INDEX IF EXISTS idx_sidecar_req_status");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_aegis_req_agent ON aegis_requests(agent_id)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_aegis_req_status ON aegis_requests(status)");
+      logger.info('Migrated: renamed sidecar_requests table -> aegis_requests');
     }
   }
 
