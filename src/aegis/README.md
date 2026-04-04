@@ -1,12 +1,12 @@
-# Sidecar Verification MVP
+# Aegis Verification MVP
 
 The independent verification layer for BTS trust scores.
 
 ## What it does
 
-Agents submit telemetry claiming behavioral compliance. The Sidecar independently
+Agents submit telemetry claiming behavioral compliance. The Aegis independently
 evaluates whether those claims are honest. If confirmed by two independent auditors,
-the agent's trust_source upgrades from "bts" (self-reported) to "sidecar-verified"
+the agent's trust_source upgrades from "bts" (self-reported) to "aegis-verified"
 and the score cap is lifted.
 
 ## Architecture
@@ -15,8 +15,8 @@ Uses existing pieces - no new services, no new tables:
 
 - **ARBITER** (Qwen QwQ-32B via OpenRouter) - first-pass evaluation
 - **MAGISTRATE** (DeepSeek R1 via OpenRouter) - independent second opinion
-- **agents.sidecar_verified_at** - timestamp column (new migration)
-- **getPublicAgents()** - updated CASE expression to include 'sidecar-verified'
+- **agents.aegis_verified_at** - timestamp column (new migration)
+- **getPublicAgents()** - updated CASE expression to include 'aegis-verified'
 
 ## Verification Criteria
 
@@ -37,7 +37,7 @@ ARBITER and MAGISTRATE independently evaluate:
 
 Each auditor returns: PASS / FAIL / INSUFFICIENT_DATA
 
-- Both PASS -> trust_source upgraded to 'sidecar-verified'
+- Both PASS -> trust_source upgraded to 'aegis-verified'
 - Any FAIL -> trust_source stays 'bts', flag recorded
 - INSUFFICIENT_DATA -> no change, retry when more telemetry exists
 
@@ -45,11 +45,11 @@ Each auditor returns: PASS / FAIL / INSUFFICIENT_DATA
 
 ```bash
 # On Render shell or locally with DB access
-OPENROUTER_API_KEY=sk-or-... node src/sidecar/verify.js
+OPENROUTER_API_KEY=sk-or-... node src/aegis/verify.js
 
 # Dry run (evaluate but don't update DB)
-OPENROUTER_API_KEY=sk-or-... node src/sidecar/verify.js --dry-run
+OPENROUTER_API_KEY=sk-or-... node src/aegis/verify.js --dry-run
 
 # Single agent
-OPENROUTER_API_KEY=sk-or-... node src/sidecar/verify.js --agent agent_eec93f5dcbae48f19e1d
+OPENROUTER_API_KEY=sk-or-... node src/aegis/verify.js --agent agent_eec93f5dcbae48f19e1d
 ```

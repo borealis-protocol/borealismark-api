@@ -107,8 +107,8 @@ assert(TelemetryPayloadSchema.safeParse(mismatchEvidence).success === false, 'ev
 const badSeq = TelemetryPayloadSchema.safeParse(makeValidPayload({ sequenceStart: 100, sequenceEnd: 50 }));
 assert(badSeq.success === false, 'sequenceEnd < sequenceStart rejected');
 
-const sidecarMode = TelemetryPayloadSchema.safeParse(makeValidPayload({ reportingMode: 'sidecar-verified' }));
-assert(sidecarMode.success === true, 'sidecar-verified reportingMode accepted');
+const aegisMode = TelemetryPayloadSchema.safeParse(makeValidPayload({ reportingMode: 'aegis-verified' }));
+assert(aegisMode.success === true, 'aegis-verified reportingMode accepted');
 
 const hackedMode = TelemetryPayloadSchema.safeParse(makeValidPayload({ reportingMode: 'hacked' }));
 assert(hackedMode.success === false, 'Invalid reportingMode rejected');
@@ -162,10 +162,10 @@ section('Trust Ceiling');
 assert(applyTrustCeiling(950, 'self-reported') === 850, 'Self-reported capped at 850');
 assert(applyTrustCeiling(850, 'self-reported') === 850, 'Self-reported at ceiling stays 850');
 assert(applyTrustCeiling(700, 'self-reported') === 700, 'Self-reported below ceiling unchanged');
-assert(applyTrustCeiling(950, 'sidecar-verified') === 950, 'Sidecar-verified uncapped at 950');
-assert(applyTrustCeiling(1000, 'sidecar-verified') === 1000, 'Sidecar-verified uncapped at 1000');
+assert(applyTrustCeiling(950, 'aegis-verified') === 950, 'Aegis-verified uncapped at 950');
+assert(applyTrustCeiling(1000, 'aegis-verified') === 1000, 'Aegis-verified uncapped at 1000');
 assert(TRUST_CEILING['self-reported'] === 850, 'Trust ceiling constant: self-reported = 850');
-assert(TRUST_CEILING['sidecar-verified'] === 1000, 'Trust ceiling constant: sidecar-verified = 1000');
+assert(TRUST_CEILING['aegis-verified'] === 1000, 'Trust ceiling constant: aegis-verified = 1000');
 
 section('Statistical Anomaly Detection (Layer 2)');
 

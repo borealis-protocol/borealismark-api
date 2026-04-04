@@ -151,7 +151,7 @@ router.get('/:agentId', (req: Request, res: Response) => {
     const tier = getTierFromScore(bmScore);
 
     // Determine trust source
-    const trustSource = (agent.sidecar_verified_at as number) ? 'sidecar-verified'
+    const trustSource = (agent.aegis_verified_at as number) ? 'aegis-verified'
       : cert ? 'audited'
       : 'bts';
 

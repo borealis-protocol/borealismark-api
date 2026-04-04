@@ -2083,12 +2083,12 @@ export async function sendAdminFreeKeyNotification(
   }
 }
 
-// ─── Sidecar Verification Emails ─────────────────────────────────────────────
+// ─── Aegis Verification Emails ─────────────────────────────────────────────
 
 /**
  * Send notification when an agent is independently verified.
  */
-export async function sendSidecarVerifiedEmail(
+export async function sendAegisVerifiedEmail(
   toEmail: string,
   userName: string,
   agentName: string,
@@ -2105,11 +2105,11 @@ export async function sendSidecarVerifiedEmail(
   <div style="max-width:560px;margin:40px auto;background:#141416;border:1px solid #222226;border-radius:8px;overflow:hidden;">
     <div style="background:linear-gradient(135deg,#1a3a2a,#141416);padding:32px 24px;text-align:center;">
       <div style="display:inline-block;background:#34d39920;border:1px solid #34d399;border-radius:50%;width:48px;height:48px;line-height:48px;font-size:24px;margin-bottom:12px;">&#10003;</div>
-      <h1 style="color:#f4f4f5;font-size:20px;margin:0;">Independently Verified</h1>
+      <h1 style="color:#f4f4f5;font-size:20px;margin:0;">Aegis Verified</h1>
     </div>
     <div style="padding:24px;">
       <p style="color:#a1a1aa;font-size:14px;line-height:1.6;margin:0 0 16px;">
-        ${userName ? userName + ', your' : 'Your'} agent <strong style="color:#f4f4f5;">${agentName}</strong> has been independently verified by two separate evaluation systems.
+        ${userName ? userName + ', your' : 'Your'} agent <strong style="color:#f4f4f5;">${agentName}</strong> has passed Aegis verification - independently evaluated by two separate AI auditors.
       </p>
       <p style="color:#a1a1aa;font-size:14px;line-height:1.6;margin:0 0 24px;">
         Your trust score ceiling has been removed. Your agent's score now reflects its full evaluated performance with no cap.
@@ -2131,23 +2131,23 @@ export async function sendSidecarVerifiedEmail(
     const result = await getResend().emails.send({
       from: FROM_ADDRESS,
       to: [toEmail],
-      subject: `Your agent ${agentName} is independently verified`,
+      subject: `Your agent ${agentName} is Aegis Verified`,
       html,
       text,
     });
-    if (result.error) { logger.error('Sidecar verified email failed', { error: result.error }); return false; }
-    logger.info('Sidecar verified email sent', { to: toEmail, agentName });
+    if (result.error) { logger.error('Aegis verified email failed', { error: result.error }); return false; }
+    logger.info('Aegis verified email sent', { to: toEmail, agentName });
     return true;
   } catch (err: any) {
-    logger.error('Sidecar verified email error', { error: err.message });
+    logger.error('Aegis verified email error', { error: err.message });
     return false;
   }
 }
 
 /**
- * Send notification when sidecar verification could not confirm an agent.
+ * Send notification when aegis verification could not confirm an agent.
  */
-export async function sendSidecarFailedEmail(
+export async function sendAegisFailedEmail(
   toEmail: string,
   userName: string,
   agentName: string,
@@ -2187,11 +2187,11 @@ export async function sendSidecarFailedEmail(
       html,
       text,
     });
-    if (result.error) { logger.error('Sidecar failed email failed', { error: result.error }); return false; }
-    logger.info('Sidecar failed email sent', { to: toEmail, agentName });
+    if (result.error) { logger.error('Aegis failed email failed', { error: result.error }); return false; }
+    logger.info('Aegis failed email sent', { to: toEmail, agentName });
     return true;
   } catch (err: any) {
-    logger.error('Sidecar failed email error', { error: err.message });
+    logger.error('Aegis failed email error', { error: err.message });
     return false;
   }
 }

@@ -2334,30 +2334,30 @@ function initSchema(db: Database.Database): void {
     }
   }
 
-  // ── Sidecar Verification MVP — add trust_source tracking to agents table ──────
-  // The sidecar verification workflow upgrades an agent's trust_source from 'bts'
-  // (self-reported) to 'sidecar-verified' (independently confirmed by ARBITER +
+  // ── Aegis Verification MVP — add trust_source tracking to agents table ──────
+  // The aegis verification workflow upgrades an agent's trust_source from 'bts'
+  // (self-reported) to 'aegis-verified' (independently confirmed by ARBITER +
   // MAGISTRATE). This column stores the verification state directly instead of
   // computing it only from audit_certificates.
   {
-    const agentColsSidecar = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
-    const colNames = agentColsSidecar.map(c => c.name);
+    const agentColsAegis = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+    const colNames = agentColsAegis.map(c => c.name);
 
-    if (!colNames.includes('sidecar_verified_at')) {
-      db.exec("ALTER TABLE agents ADD COLUMN sidecar_verified_at INTEGER DEFAULT NULL");
-      logger.info('Migrated agents: added sidecar_verified_at column');
+    if (!colNames.includes('aegis_verified_at')) {
+      db.exec("ALTER TABLE agents ADD COLUMN aegis_verified_at INTEGER DEFAULT NULL");
+      logger.info('Migrated agents: added aegis_verified_at column');
     }
-    if (!colNames.includes('sidecar_attestation')) {
-      db.exec("ALTER TABLE agents ADD COLUMN sidecar_attestation TEXT DEFAULT NULL");
-      logger.info('Migrated agents: added sidecar_attestation column (JSON attestation record)');
+    if (!colNames.includes('aegis_attestation')) {
+      db.exec("ALTER TABLE agents ADD COLUMN aegis_attestation TEXT DEFAULT NULL");
+      logger.info('Migrated agents: added aegis_attestation column (JSON attestation record)');
     }
   }
 
-  // ── Sidecar Requests Queue ─────────────────────────────────────────────────────
-  // Tracks user-initiated sidecar verification requests. A lightweight queue
+  // ── Aegis Requests Queue ─────────────────────────────────────────────────────
+  // Tracks user-initiated aegis verification requests. A lightweight queue
   // processed by an interval runner on the server.
   db.exec(`
-    CREATE TABLE IF NOT EXISTS sidecar_requests (
+    CREATE TABLE IF NOT EXISTS aegis_requests (
       id          TEXT PRIMARY KEY,
       agent_id    TEXT NOT NULL,
       user_id     TEXT NOT NULL,
@@ -2369,8 +2369,8 @@ function initSchema(db: Database.Database): void {
       FOREIGN KEY (agent_id) REFERENCES agents(id),
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
-    CREATE INDEX IF NOT EXISTS idx_sidecar_req_agent ON sidecar_requests(agent_id);
-    CREATE INDEX IF NOT EXISTS idx_sidecar_req_status ON sidecar_requests(status);
+    CREATE INDEX IF NOT EXISTS idx_aegis_req_agent ON aegis_requests(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_aegis_req_status ON aegis_requests(status);
 
     -- ── Borealis Brain ─────────────────────────────────────────────────────────
     -- The knowledge graph inside Mission Control. Every note is a star.
@@ -3131,7 +3131,7 @@ export function getPublicAgents(limit: number = 50, offset: number = 0): Record<
               ac.certificate_id,
               ac.issued_at AS last_audit_at,
               CASE
-                WHEN a.sidecar_verified_at IS NOT NULL THEN 'sidecar-verified'
+                WHEN a.aegis_verified_at IS NOT NULL THEN 'aegis-verified'
                 WHEN ac.certificate_id IS NOT NULL THEN 'audited'
                 ELSE 'bts'
               END AS trust_source
@@ -3312,28 +3312,28 @@ export function getTotalForfeited(depositId: string): number {
   return result?.total ?? 0;
 }
 
-// ─── Sidecar Verification Queue ─────────────────────────────────────────────
+// ─── Aegis Verification Queue ─────────────────────────────────────────────
 
-export function createSidecarRequest(id: string, agentId: string, userId: string): void {
+export function createAegisRequest(id: string, agentId: string, userId: string): void {
   getDb().prepare(`
-    INSERT INTO sidecar_requests (id, agent_id, user_id, requested_at, status)
+    INSERT INTO aegis_requests (id, agent_id, user_id, requested_at, status)
     VALUES (?, ?, ?, ?, 'queued')
   `).run(id, agentId, userId, Date.now());
 }
 
-export function getSidecarRequestByAgent(agentId: string, windowMs: number = 30 * 24 * 60 * 60 * 1000): Record<string, unknown> | undefined {
+export function getAegisRequestByAgent(agentId: string, windowMs: number = 30 * 24 * 60 * 60 * 1000): Record<string, unknown> | undefined {
   const cutoff = Date.now() - windowMs;
   return getDb().prepare(`
-    SELECT * FROM sidecar_requests
+    SELECT * FROM aegis_requests
     WHERE agent_id = ? AND requested_at > ?
     ORDER BY requested_at DESC LIMIT 1
   `).get(agentId, cutoff) as Record<string, unknown> | undefined;
 }
 
-export function getQueuedSidecarRequests(limit: number = 5): Record<string, unknown>[] {
+export function getQueuedAegisRequests(limit: number = 5): Record<string, unknown>[] {
   return getDb().prepare(`
     SELECT sr.*, a.name AS agent_name, u.email AS user_email, u.name AS user_name
-    FROM sidecar_requests sr
+    FROM aegis_requests sr
     JOIN agents a ON sr.agent_id = a.id
     JOIN users u ON sr.user_id = u.id
     WHERE sr.status = 'queued'
@@ -3342,9 +3342,9 @@ export function getQueuedSidecarRequests(limit: number = 5): Record<string, unkn
   `).all(limit) as Record<string, unknown>[];
 }
 
-export function updateSidecarRequest(id: string, status: string, result?: string, error?: string): void {
+export function updateAegisRequest(id: string, status: string, result?: string, error?: string): void {
   getDb().prepare(`
-    UPDATE sidecar_requests
+    UPDATE aegis_requests
     SET status = ?, completed_at = ?, result = ?, error = ?
     WHERE id = ?
   `).run(status, Date.now(), result ?? null, error ?? null, id);
@@ -3365,15 +3365,15 @@ export function getActiveMerlinLicenseForUser(userId: string): Record<string, un
   `).get(userId) as Record<string, unknown> | undefined;
 }
 
-export function setSidecarVerified(agentId: string, attestation: string): void {
+export function setAegisVerified(agentId: string, attestation: string): void {
   getDb().prepare(`
-    UPDATE agents SET sidecar_verified_at = ?, sidecar_attestation = ? WHERE id = ?
+    UPDATE agents SET aegis_verified_at = ?, aegis_attestation = ? WHERE id = ?
   `).run(Date.now(), attestation, agentId);
 }
 
-export function clearSidecarVerification(agentId: string): void {
+export function clearAegisVerification(agentId: string): void {
   getDb().prepare(`
-    UPDATE agents SET sidecar_verified_at = NULL, sidecar_attestation = NULL WHERE id = ?
+    UPDATE agents SET aegis_verified_at = NULL, aegis_attestation = NULL WHERE id = ?
   `).run(agentId);
 }
 

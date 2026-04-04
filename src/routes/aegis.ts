@@ -1,8 +1,8 @@
 /**
- * Sidecar Verification Routes
+ * Aegis Verification Routes
  *
- * POST /v1/sidecar/request  - Request independent verification for an agent
- * GET  /v1/sidecar/status/:agentId - Check verification status for an agent
+ * POST /v1/aegis/request  - Request independent verification for an agent
+ * GET  /v1/aegis/status/:agentId - Check verification status for an agent
  *
  * Requires JWT auth (Merlin pro license holder).
  */
@@ -15,8 +15,8 @@ import {
   getAgentByIdAndOwner,
   getTelemetryCountForAgent,
   getActiveMerlinLicenseForUser,
-  createSidecarRequest,
-  getSidecarRequestByAgent,
+  createAegisRequest,
+  getAegisRequestByAgent,
 } from '../db/database';
 
 const router = Router();
@@ -24,7 +24,7 @@ const router = Router();
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const MIN_TELEMETRY_BATCHES = 5;
 
-// ─── POST /v1/sidecar/request ─────────────────────────────────────────────────
+// ─── POST /v1/aegis/request ─────────────────────────────────────────────────
 
 router.post('/request', requireAuth, (req: Request, res: Response) => {
   const user = (req as AuthRequest).user!;
@@ -54,18 +54,18 @@ router.post('/request', requireAuth, (req: Request, res: Response) => {
       return;
     }
 
-    // 3. Check if already sidecar-verified within 30 days
-    if (agent.sidecar_verified_at && (Date.now() - (agent.sidecar_verified_at as number)) < THIRTY_DAYS_MS) {
+    // 3. Check if already aegis-verified within 30 days
+    if (agent.aegis_verified_at && (Date.now() - (agent.aegis_verified_at as number)) < THIRTY_DAYS_MS) {
       res.json({
         success: true,
         status: 'already_verified',
-        verifiedAt: agent.sidecar_verified_at,
+        verifiedAt: agent.aegis_verified_at,
       });
       return;
     }
 
     // 4. Check for existing request within 30-day window
-    const existing = getSidecarRequestByAgent(agentId, THIRTY_DAYS_MS);
+    const existing = getAegisRequestByAgent(agentId, THIRTY_DAYS_MS);
     if (existing) {
       const status = existing.status as string;
       if (status === 'queued' || status === 'processing') {
@@ -109,9 +109,9 @@ router.post('/request', requireAuth, (req: Request, res: Response) => {
 
     // 6. Create the request
     const requestId = uuidv4();
-    createSidecarRequest(requestId, agentId, user.sub);
+    createAegisRequest(requestId, agentId, user.sub);
 
-    logger.info('Sidecar verification requested', {
+    logger.info('Aegis verification requested', {
       requestId,
       agentId,
       userId: user.sub,
@@ -125,12 +125,12 @@ router.post('/request', requireAuth, (req: Request, res: Response) => {
       estimatedMinutes: 5,
     });
   } catch (err: any) {
-    logger.error('Sidecar request failed', { error: err.message, agentId, userId: user.sub });
+    logger.error('Aegis request failed', { error: err.message, agentId, userId: user.sub });
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
-// ─── GET /v1/sidecar/status/:agentId ──────────────────────────────────────────
+// ─── GET /v1/aegis/status/:agentId ──────────────────────────────────────────
 
 router.get('/status/:agentId', requireAuth, (req: Request, res: Response) => {
   const user = (req as AuthRequest).user!;
@@ -144,19 +144,19 @@ router.get('/status/:agentId', requireAuth, (req: Request, res: Response) => {
       return;
     }
 
-    // Check for sidecar verification state
-    if (agent.sidecar_verified_at) {
+    // Check for aegis verification state
+    if (agent.aegis_verified_at) {
       res.json({
         success: true,
         status: 'verified',
-        verifiedAt: agent.sidecar_verified_at,
-        trustSource: 'sidecar-verified',
+        verifiedAt: agent.aegis_verified_at,
+        trustSource: 'aegis-verified',
       });
       return;
     }
 
     // Check for pending/recent request
-    const request = getSidecarRequestByAgent(agentId, THIRTY_DAYS_MS);
+    const request = getAegisRequestByAgent(agentId, THIRTY_DAYS_MS);
     if (request) {
       res.json({
         success: true,
@@ -180,7 +180,7 @@ router.get('/status/:agentId', requireAuth, (req: Request, res: Response) => {
       minTelemetry: MIN_TELEMETRY_BATCHES,
     });
   } catch (err: any) {
-    logger.error('Sidecar status check failed', { error: err.message, agentId });
+    logger.error('Aegis status check failed', { error: err.message, agentId });
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });

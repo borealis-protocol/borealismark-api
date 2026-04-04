@@ -9,7 +9,7 @@
  *   Three rounds of Claude-Gemini adversarial debate confirmed that
  *   self-reported telemetry is the only practical v1 approach.
  *   The `reportingMode` field enables a trust ceiling (max BTS 85 for
- *   self-reported) and paves the way for the Sidecar observer in v2.
+ *   self-reported) and paves the way for the Aegis observer in v2.
  *
  * Anti-gaming layers applied here:
  *   Layer 1 (Deterrence):  Key revocation + public FLAGGED on Hedera
@@ -121,7 +121,7 @@ export const TelemetryPayloadSchema = z.object({
   }),
 
   // Reporting mode — determines trust ceiling
-  reportingMode: z.enum(['self-reported', 'sidecar-verified']),
+  reportingMode: z.enum(['self-reported', 'aegis-verified']),
 
   // The actual scores — maps 1:1 to scoring.ts
   scores: ScoresSchema,
@@ -270,17 +270,17 @@ export function transformToScoringInput(payload: TelemetryPayload): {
 /**
  * Free-tier keys are hard-capped at 650/1000 (display: 65) regardless of
  * reporting mode. This creates the upgrade incentive: pay $39.99 for Merlin
- * and unlock BM Score up to 85 (self-reported) or 100 (sidecar-verified).
+ * and unlock BM Score up to 85 (self-reported) or 100 (aegis-verified).
  *
  * Pro-tier keys follow the reporting-mode ceiling:
  *   Self-reported:    max 850/1000 (display 85)
- *   Sidecar-verified: max 1000/1000 (display 100, uncapped)
+ *   Aegis-verified: max 1000/1000 (display 100, uncapped)
  */
 export const FREE_TIER_CEILING = 650; // Max BTS 65 (display) for free-tier keys
 
 export const TRUST_CEILING = {
   'self-reported': 850,     // Pro tier, self-reported: max BTS 85
-  'sidecar-verified': 1000, // Pro tier, sidecar-verified: uncapped
+  'aegis-verified': 1000, // Pro tier, aegis-verified: uncapped
 } as const;
 
 export function applyTrustCeiling(

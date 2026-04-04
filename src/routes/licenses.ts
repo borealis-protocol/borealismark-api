@@ -86,10 +86,10 @@ const TIER_AGENT_LIMITS: Record<string, number> = {
 
 // BTS License Key tier — determines trust score ceiling at telemetry time
 // free  = no payment, max BM Score 65, hard cap of 1 active free key per email
-// pro   = $39.99 one-time, max BM Score 85 (self-reported) / 100 (sidecar)
+// pro   = $39.99 one-time, max BM Score 85 (self-reported) / 100 (aegis)
 const LICENSE_TIER_SCORE_CEILING: Record<string, number> = {
   free: 65,
-  pro: 85,   // Self-reported ceiling; sidecar-verified is uncapped at 100
+  pro: 85,   // Self-reported ceiling; aegis-verified is uncapped at 100
 };
 
 // ─── Key Generation ───────────────────────────────────────────────────────────

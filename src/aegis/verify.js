@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 /**
- * Sidecar Verification MVP
+ * Aegis Verification MVP
  *
  * Independent verification of BTS trust scores using two AI auditors:
  *   - ARBITER (Qwen QwQ-32B) — first-pass evaluation
  *   - MAGISTRATE (DeepSeek R1) — independent second opinion
  *
  * If both auditors agree the telemetry is honest, the agent's trust_source
- * upgrades from 'bts' to 'sidecar-verified' and the score cap is lifted.
+ * upgrades from 'bts' to 'aegis-verified' and the score cap is lifted.
  *
  * Usage:
- *   OPENROUTER_API_KEY=sk-or-... node src/sidecar/verify.js
- *   OPENROUTER_API_KEY=sk-or-... node src/sidecar/verify.js --dry-run
- *   OPENROUTER_API_KEY=sk-or-... node src/sidecar/verify.js --agent agent_eec93f5dcbae48f19e1d
+ *   OPENROUTER_API_KEY=sk-or-... node src/aegis/verify.js
+ *   OPENROUTER_API_KEY=sk-or-... node src/aegis/verify.js --dry-run
+ *   OPENROUTER_API_KEY=sk-or-... node src/aegis/verify.js --agent agent_eec93f5dcbae48f19e1d
  *
- * Runs on Render shell: cd /app && node src/sidecar/verify.js
+ * Runs on Render shell: cd /app && node src/aegis/verify.js
  * Requires: better-sqlite3 (already installed), OPENROUTER_API_KEY env var
  */
 
@@ -69,7 +69,7 @@ function getAgentRegistration(db, agentId) {
   return db.prepare(`
     SELECT a.id, a.name, a.description, a.version, a.registered_at,
            a.agent_type, a.bts_score, a.bts_credit_rating,
-           a.sidecar_verified_at, a.sidecar_attestation
+           a.aegis_verified_at, a.aegis_attestation
     FROM agents a WHERE a.id = ?
   `).get(agentId);
 }
@@ -96,7 +96,7 @@ function callOpenRouter(model, systemPrompt, userPrompt) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
         'HTTP-Referer': 'https://borealisprotocol.ai',
-        'X-Title': 'Borealis Sidecar Verification',
+        'X-Title': 'Borealis Aegis Verification',
         'Content-Length': Buffer.byteLength(payload),
       },
     };
@@ -222,7 +222,7 @@ function parseVerdict(response) {
 async function main() {
   console.log('');
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║         BOREALIS SIDECAR VERIFICATION MVP               ║');
+  console.log('║         BOREALIS AEGIS VERIFICATION MVP               ║');
   console.log('║         Two-auditor independent trust assessment         ║');
   console.log('╚══════════════════════════════════════════════════════════╝');
   console.log('');
@@ -255,9 +255,9 @@ async function main() {
     console.log(`[AGENT] ${agent.name} (${agent.id})`);
     console.log(`        BTS Score: ${agent.bts_score || 'None'} | Rating: ${agent.bts_credit_rating || 'None'}`);
 
-    // Skip already sidecar-verified agents (unless explicitly targeted)
-    if (agent.sidecar_verified_at && !TARGET_AGENT) {
-      console.log(`        Already sidecar-verified at ${new Date(agent.sidecar_verified_at).toISOString()}`);
+    // Skip already aegis-verified agents (unless explicitly targeted)
+    if (agent.aegis_verified_at && !TARGET_AGENT) {
+      console.log(`        Already aegis-verified at ${new Date(agent.aegis_verified_at).toISOString()}`);
       console.log(`        Skipping. Use --agent ${agent.id} to re-verify.`);
       results.push({ agent: agent.id, name: agent.name, status: 'SKIPPED', reason: 'already verified' });
       continue;
@@ -335,23 +335,23 @@ async function main() {
           summary: magistrateResult.summary,
         },
         telemetryBatchCount: telemetry.length,
-        protocol: 'sidecar-mvp/1.0',
+        protocol: 'aegis-mvp/1.0',
       });
 
       try {
         db.prepare(`
           UPDATE agents
-          SET sidecar_verified_at = ?, sidecar_attestation = ?
+          SET aegis_verified_at = ?, aegis_attestation = ?
           WHERE id = ?
         `).run(now, attestation, agent.id);
-        console.log(`  [DB] Agent trust_source upgraded to 'sidecar-verified'`);
+        console.log(`  [DB] Agent trust_source upgraded to 'aegis-verified'`);
         console.log(`  [DB] Attestation record stored`);
       } catch (dbErr) {
         console.error(`  [DB] Failed to update: ${dbErr.message}`);
         finalStatus = 'DB_ERROR';
       }
     } else if (finalStatus === 'VERIFIED' && DRY_RUN) {
-      console.log(`  [DRY-RUN] Would upgrade trust_source to 'sidecar-verified'`);
+      console.log(`  [DRY-RUN] Would upgrade trust_source to 'aegis-verified'`);
     }
 
     results.push({
@@ -386,7 +386,7 @@ async function main() {
   }
 
   db.close();
-  console.log('\n[DONE] Sidecar verification complete.');
+  console.log('\n[DONE] Aegis verification complete.');
 }
 
 main().catch(err => {
