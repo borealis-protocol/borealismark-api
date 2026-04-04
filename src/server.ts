@@ -43,6 +43,7 @@ import contactRouter from './routes/contact';
 import claudeRouter from './routes/claude';
 import aegisRouter from './routes/aegis';
 import brainRouter from './routes/brain';
+import assistRouter from './routes/assist';
 import { cleanupExpiredInvoices } from './hedera/usdc';
 import { validateHederaConfig, logHealthCheckResults } from './hedera/healthcheck';
 import { validateStripeConfig, getStripeMode } from './stripe/mode';
@@ -240,6 +241,7 @@ app.use('/v1/contact',  contactRouter);
 app.use('/v1/claude',   claudeRouter);
 app.use('/v1/aegis',  aegisRouter);
 app.use('/v1/brain',    brainRouter);
+app.use('/v1/assist',   assistRouter);
 
 // ─── Static Files (Dashboard) ────────────────────────────────────────────────
 
