@@ -97,7 +97,7 @@ async function callOpenRouter(
     const data = await response.json();
     return data.choices[0]?.message?.content || 'I am Orion, your AI partner in Borealis Protocol.';
   } catch (err) {
-    logger.error('OpenRouter call failed', err);
+    logger.error('OpenRouter call failed', { error: String(err) });
     throw err;
   }
 }
@@ -138,7 +138,7 @@ router.post('/context', requireAuth, (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('POST /context error', err);
+    logger.error('POST /context error', { error: String(err) });
 
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, error: 'Invalid request', details: err.errors });
@@ -182,7 +182,7 @@ router.get('/context', requireAuth, (req: AuthRequest, res) => {
       }))
     });
   } catch (err) {
-    logger.error('GET /context error', err);
+    logger.error('GET /context error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -220,7 +220,7 @@ router.post('/conversations', requireAuth, (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('POST /conversations error', err);
+    logger.error('POST /conversations error', { error: String(err) });
 
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, error: 'Invalid request', details: err.errors });
@@ -272,7 +272,7 @@ router.get('/conversations', requireAuth, (req: AuthRequest, res) => {
       offset
     });
   } catch (err) {
-    logger.error('GET /conversations error', err);
+    logger.error('GET /conversations error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -328,7 +328,7 @@ router.get('/conversations/:id', requireAuth, (req: AuthRequest, res) => {
       }))
     });
   } catch (err) {
-    logger.error('GET /conversations/:id error', err);
+    logger.error('GET /conversations/:id error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -409,7 +409,7 @@ router.post('/message', requireAuth, async (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('POST /message error', err);
+    logger.error('POST /message error', { error: String(err) });
 
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, error: 'Invalid request', details: err.errors });
@@ -627,7 +627,7 @@ router.post('/embed', requireAuth, async (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('POST /embed error', err);
+    logger.error('POST /embed error', { error: String(err) });
 
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, error: 'Invalid request', details: err.errors });
@@ -714,7 +714,7 @@ router.post('/embed/batch', requireAuth, async (req: AuthRequest, res) => {
       } catch (err: any) {
         failed++;
         errors.push({ noteId: note.id, error: err.message || 'Unknown error' });
-        logger.error(`SMZ batch: Failed to embed note ${note.id}`, err);
+        logger.error(`SMZ batch: Failed to embed note ${note.id}`, { error: String(err) });
       }
     }
 
@@ -731,7 +731,7 @@ router.post('/embed/batch', requireAuth, async (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('POST /embed/batch error', err);
+    logger.error('POST /embed/batch error', { error: String(err) });
 
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, error: 'Invalid request', details: err.errors });
@@ -829,7 +829,7 @@ router.get('/similarity/:noteId', requireAuth, (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('GET /similarity/:noteId error', err);
+    logger.error('GET /similarity/:noteId error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Similarity query failed' });
   }
 });
@@ -886,7 +886,7 @@ router.get('/embed/status', requireAuth, (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('GET /embed/status error', err);
+    logger.error('GET /embed/status error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Status query failed' });
   }
 });

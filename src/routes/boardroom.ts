@@ -74,7 +74,7 @@ router.post('/', (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('POST / error', err);
+    logger.error('POST / error', { error: String(err) });
 
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, error: 'Invalid request', details: err.errors });
@@ -123,7 +123,7 @@ router.get('/', (req: AuthRequest, res) => {
       }))
     });
   } catch (err) {
-    logger.error('GET / error', err);
+    logger.error('GET / error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -167,7 +167,7 @@ router.get('/:id', (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('GET /:id error', err);
+    logger.error('GET /:id error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -248,7 +248,7 @@ router.put('/:id', (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('PUT /:id error', err);
+    logger.error('PUT /:id error', { error: String(err) });
 
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, error: 'Invalid request', details: err.errors });

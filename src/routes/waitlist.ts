@@ -57,7 +57,7 @@ router.post('/', (req, res) => {
       isNew: true
     });
   } catch (err) {
-    logger.error('POST / error', err);
+    logger.error('POST / error', { error: String(err) });
 
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, error: 'Invalid request', details: err.errors });
@@ -99,7 +99,7 @@ router.get('/', requireMasterKey, (req, res) => {
       }))
     });
   } catch (err) {
-    logger.error('GET / error', err);
+    logger.error('GET / error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });

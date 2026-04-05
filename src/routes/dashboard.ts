@@ -65,7 +65,7 @@ router.get('/summary', requireAuth, (req: AuthRequest, res) => {
       }
     });
   } catch (err) {
-    logger.error('GET /summary error', err);
+    logger.error('GET /summary error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -127,7 +127,7 @@ router.get('/activity', requireAuth, (req: AuthRequest, res) => {
       activities: limitedActivities
     });
   } catch (err) {
-    logger.error('GET /activity error', err);
+    logger.error('GET /activity error', { error: String(err) });
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
