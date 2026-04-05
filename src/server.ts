@@ -44,6 +44,10 @@ import claudeRouter from './routes/claude';
 import aegisRouter from './routes/aegis';
 import brainRouter from './routes/brain';
 import assistRouter from './routes/assist';
+import orionRouter from './routes/orion';
+import waitlistRouter from './routes/waitlist';
+import dashboardRouter from './routes/dashboard';
+import boardroomRouter from './routes/boardroom';
 import { cleanupExpiredInvoices } from './hedera/usdc';
 import { validateHederaConfig, logHealthCheckResults } from './hedera/healthcheck';
 import { validateStripeConfig, getStripeMode } from './stripe/mode';
@@ -242,6 +246,10 @@ app.use('/v1/claude',   claudeRouter);
 app.use('/v1/aegis',  aegisRouter);
 app.use('/v1/brain',    brainRouter);
 app.use('/v1/assist',   assistRouter);
+app.use('/v1/orion',     orionRouter);
+app.use('/v1/waitlist',  waitlistRouter);
+app.use('/v1/dashboard', dashboardRouter);
+app.use('/v1/boardroom', boardroomRouter);
 
 // ─── Static Files (Dashboard) ────────────────────────────────────────────────
 

@@ -1,7 +1,9 @@
 import type { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
 import { validateApiKey } from '../db/database';
+import { logger } from './logger';
 
-// ─── Extended Request Type ─────────────────────────────────────────────────────
+// ─── Extended Request Types ────────────────────────────────────────────────────
 
 export interface AuthenticatedRequest extends Request {
   apiKey: {
@@ -10,6 +12,49 @@ export interface AuthenticatedRequest extends Request {
     scopes: string[];
   };
   requestId: string;
+}
+
+export interface AuthRequest extends Request {
+  userId?: string;
+}
+
+// ─── JWT Helpers (for user-facing OS endpoints) ───────────────────────────────
+
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key';
+
+export function getUserFromToken(token?: string): string | null {
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    return decoded.userId || decoded.id || decoded.sub;
+  } catch {
+    return null;
+  }
+}
+
+export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) {
+    res.status(401).json({ success: false, error: 'Missing authorization token' });
+    return;
+  }
+  const userId = getUserFromToken(token);
+  if (!userId) {
+    res.status(401).json({ success: false, error: 'Invalid authorization token' });
+    return;
+  }
+  (req as AuthRequest).userId = userId;
+  next();
+}
+
+export function requireMasterKey(req: Request, res: Response, next: NextFunction): void {
+  const masterKey = req.headers['x-master-key'] as string;
+  const expectedKey = process.env.API_MASTER_KEY || 'bm-master-x9k2m5p7q1r4s8t6v3w0y5z2a4b6c8d0';
+  if (masterKey !== expectedKey) {
+    res.status(403).json({ success: false, error: 'Forbidden' });
+    return;
+  }
+  next();
 }
 
 // ─── Authentication Middleware ─────────────────────────────────────────────────

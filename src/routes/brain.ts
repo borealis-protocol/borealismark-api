@@ -18,6 +18,7 @@ import type { AuthRequest } from './auth';
 import { requireApiKey, requireScope } from '../middleware/auth';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { logger } from '../middleware/logger';
+import { embedNoteAsync } from './smz-embed';
 
 const router = Router();
 
@@ -362,6 +363,9 @@ router.post('/notes', requireAuth, (req: Request, res: Response) => {
     // Auto-link: find notes with 2+ matching tags
     runAutoLink(db, noteId, userId);
 
+    // SMZ: Fire-and-forget embedding generation
+    embedNoteAsync(noteId, userId);
+
     const created = db.prepare('SELECT * FROM brain_notes WHERE id = ?').get(noteId) as any;
 
     res.status(201).json({
@@ -438,6 +442,9 @@ router.post('/notes/agent', requireApiKey, requireScope('write'), (req: Request,
 
     // Auto-link: find notes with 2+ matching tags
     runAutoLink(db, noteId, userId);
+
+    // SMZ: Fire-and-forget embedding generation
+    embedNoteAsync(noteId, userId);
 
     const created = db.prepare('SELECT * FROM brain_notes WHERE id = ?').get(noteId) as any;
 
@@ -527,11 +534,16 @@ router.post('/notes/intel-feed', requireApiKey, requireScope('write'), (req: Req
         insertTags(db, noteId, allTags);
         runAutoLink(db, noteId, userId);
 
-        created.push({ id: noteId, title: item.title, tags: getTagsForNote(db, noteId) });
+        created.push({ id: noteId, title: item.title, tags: getTagsForNote(db, noteId), _userId: userId });
       }
     });
 
     insertBatch();
+
+    // SMZ: Fire-and-forget embedding for all created notes
+    for (const note of created) {
+      embedNoteAsync(note.id, note._userId || userId);
+    }
 
     logger.info('Brain: intel feed batch deposited', { count: created.length, userId });
 
@@ -1046,6 +1058,11 @@ router.post('/import', requireAuth, (req: Request, res: Response) => {
     });
 
     doImport();
+
+    // SMZ: Fire-and-forget embedding for all imported notes
+    for (const id of createdIds) {
+      embedNoteAsync(id, userId);
+    }
 
     res.status(201).json({
       success: true,

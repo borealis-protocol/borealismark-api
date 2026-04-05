@@ -604,6 +604,67 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_aggregates_period ON data_aggregates(period_start);
   `);
 
+  // ── Orion Tables (OS AI Partner) ─────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS orion_context (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(user_id, key)
+    );
+    CREATE TABLE IF NOT EXISTS orion_conversations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      title TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS orion_messages (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('user', 'orion', 'system')),
+      content TEXT NOT NULL,
+      metadata TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (conversation_id) REFERENCES orion_conversations(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_orion_msg_conv ON orion_messages(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_orion_ctx_user ON orion_context(user_id);
+    CREATE INDEX IF NOT EXISTS idx_orion_conv_user ON orion_conversations(user_id);
+  `);
+
+  // ── Waitlist Table ───────────────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS waitlist (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      name TEXT,
+      company TEXT,
+      use_case TEXT,
+      agent_count TEXT,
+      source TEXT DEFAULT 'website',
+      created_at INTEGER NOT NULL
+    );
+  `);
+
+  // ── Boardroom Boards Table ───────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS boardroom_boards (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      title TEXT NOT NULL DEFAULT 'Untitled Board',
+      data TEXT NOT NULL DEFAULT '{}',
+      is_public INTEGER NOT NULL DEFAULT 0,
+      share_token TEXT UNIQUE,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_boards_user ON boardroom_boards(user_id);
+    CREATE INDEX IF NOT EXISTS idx_boards_share ON boardroom_boards(share_token);
+  `);
+
   // Migrate: add retry_count column to platform_events (for HCS retry tracking)
   const eventCols = (db.prepare("PRAGMA table_info(platform_events)").all() as Array<{ name: string }>).map(r => r.name);
   if (!eventCols.includes('retry_count')) db.exec("ALTER TABLE platform_events ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
@@ -2417,12 +2478,16 @@ function initSchema(db: Database.Database): void {
       created_by_type TEXT NOT NULL CHECK(created_by_type IN ('user', 'agent', 'system')),
       created_by_id TEXT NOT NULL,
       is_pillar_root INTEGER NOT NULL DEFAULT 0,
+      embedding BLOB,
+      embedding_model TEXT,
+      embedded_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_brain_notes_user ON brain_notes(user_id);
     CREATE INDEX IF NOT EXISTS idx_brain_notes_user_pillar ON brain_notes(user_id, pillar);
     CREATE INDEX IF NOT EXISTS idx_brain_notes_creator ON brain_notes(created_by_type, created_by_id);
+    CREATE INDEX IF NOT EXISTS idx_brain_notes_embedded ON brain_notes(embedded_at) WHERE embedded_at IS NULL;
 
     CREATE TABLE IF NOT EXISTS brain_links (
       id TEXT PRIMARY KEY,
@@ -2456,6 +2521,24 @@ function initSchema(db: Database.Database): void {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (note_id) REFERENCES brain_notes(id) ON DELETE CASCADE
     );
+
+    -- ── SMZ Similarity Cache ──────────────────────────────────────────────────
+    -- Precomputed pairwise cosine similarities for Semantic Magnetism.
+    -- Avoids recomputing on every query. Tiers: primary/secondary/ambient.
+
+    CREATE TABLE IF NOT EXISTS smz_similarities (
+      note_a_id TEXT NOT NULL,
+      note_b_id TEXT NOT NULL,
+      similarity REAL NOT NULL,
+      tier TEXT NOT NULL CHECK(tier IN ('primary', 'secondary', 'ambient')),
+      computed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (note_a_id, note_b_id),
+      FOREIGN KEY (note_a_id) REFERENCES brain_notes(id) ON DELETE CASCADE,
+      FOREIGN KEY (note_b_id) REFERENCES brain_notes(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_smz_sim_note_a ON smz_similarities(note_a_id, tier);
+    CREATE INDEX IF NOT EXISTS idx_smz_sim_note_b ON smz_similarities(note_b_id, tier);
+    CREATE INDEX IF NOT EXISTS idx_smz_sim_tier ON smz_similarities(tier);
   `);
 }
 
