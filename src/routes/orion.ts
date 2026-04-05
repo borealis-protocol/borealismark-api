@@ -891,4 +891,783 @@ router.get('/embed/status', requireAuth, (req: AuthRequest, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMZ Phase 3 - Decomposition Engine
+// "Before magnetism kicks in, Orion decomposes."
+// Users brain-dump. Orion atomizes. Magnetism organizes.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const decomposeSchema = z.object({
+  content: z.string().min(10, 'Content must be at least 10 characters'),
+  title: z.string().optional(),
+  sourceType: z.enum(['text', 'markdown', 'paste', 'document']).optional(),
+  autoEmbed: z.boolean().optional()    // Default true - embed atomic units immediately
+});
+
+/**
+ * Call OpenRouter with a fast model (Haiku-class) for decomposition.
+ * Speed matters here - decomposition must feel instant.
+ */
+async function callDecompositionLLM(content: string, title?: string): Promise<Array<{ title: string; content: string; confidence: number }>> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+
+  if (!apiKey) {
+    throw new Error('AI service not configured');
+  }
+
+  const systemPrompt = `You are a Zettelkasten decomposition engine. Your job is to break multi-topic content into atomic semantic units.
+
+RULES:
+1. Each atomic unit must contain exactly ONE idea, concept, or fact
+2. Each unit must be self-contained - understandable without the parent document
+3. Preserve the original meaning and nuance - do not summarize away detail
+4. Give each unit a concise, descriptive title (max 80 chars)
+5. Rate your confidence in each decomposition from 0.0 to 1.0:
+   - 1.0 = clearly a distinct, self-contained idea
+   - 0.7-0.9 = probably atomic but could be split further or might overlap with another unit
+   - 0.5-0.7 = uncertain boundary - this might belong merged with another unit
+   - <0.5 = very uncertain - this might not be a distinct unit at all
+6. If the content is already atomic (single idea), return it as one unit with confidence 1.0
+7. Output ONLY valid JSON array. No markdown, no explanation.
+
+OUTPUT FORMAT (strict JSON array):
+[
+  {"title": "Concise title", "content": "Full atomic content preserving detail", "confidence": 0.95},
+  {"title": "Another title", "content": "Another atomic unit", "confidence": 0.85}
+]`;
+
+  const userMessage = title
+    ? `Decompose this document titled "${title}" into atomic semantic units:\n\n${content}`
+    : `Decompose this content into atomic semantic units:\n\n${content}`;
+
+  // Use a fast, cheap model for decomposition
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+      'HTTP-Referer': 'https://borealisprotocol.ai',
+      'X-Title': 'Borealis Protocol - SMZ Decomposition'
+    },
+    body: JSON.stringify({
+      model: 'anthropic/claude-haiku-3',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage }
+      ],
+      temperature: 0.3,  // Low temp for consistent decomposition
+      max_tokens: 4096
+    })
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    logger.error('Decomposition LLM error', { status: response.status, body: errText });
+
+    // Fallback to Gemini Flash if Haiku fails
+    const fallbackResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'HTTP-Referer': 'https://borealisprotocol.ai',
+        'X-Title': 'Borealis Protocol - SMZ Decomposition'
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.0-flash-001',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage }
+        ],
+        temperature: 0.3,
+        max_tokens: 4096
+      })
+    });
+
+    if (!fallbackResponse.ok) {
+      throw new Error('All decomposition models unavailable');
+    }
+
+    const fallbackData = await fallbackResponse.json() as any;
+    const fallbackText = fallbackData.choices?.[0]?.message?.content || '[]';
+    return JSON.parse(fallbackText.replace(/```json\n?|\n?```/g, '').trim());
+  }
+
+  const data = await response.json() as any;
+  const resultText = data.choices?.[0]?.message?.content || '[]';
+
+  // Strip any markdown code fences the LLM might wrap around the JSON
+  const cleanJson = resultText.replace(/```json\n?|\n?```/g, '').trim();
+
+  try {
+    const parsed = JSON.parse(cleanJson);
+    if (!Array.isArray(parsed)) {
+      throw new Error('Expected JSON array');
+    }
+    return parsed.map((unit: any) => ({
+      title: String(unit.title || 'Untitled Unit').slice(0, 200),
+      content: String(unit.content || ''),
+      confidence: Math.max(0, Math.min(1, Number(unit.confidence) || 0.7))
+    }));
+  } catch (parseErr) {
+    logger.error('Failed to parse decomposition result', { raw: cleanJson.slice(0, 500), error: String(parseErr) });
+    // Fallback: treat entire content as one atomic unit
+    return [{
+      title: title || 'Imported Content',
+      content: content,
+      confidence: 0.5
+    }];
+  }
+}
+
+router.post('/decompose', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const validated = decomposeSchema.parse(req.body);
+    const db = getDb();
+    const autoEmbed = validated.autoEmbed !== false; // Default true
+    const now = Date.now();
+
+    // Step 1: Decompose via LLM
+    logger.info(`SMZ Decompose: Starting for user ${userId} (${validated.content.length} chars)`);
+    const atomicUnits = await callDecompositionLLM(validated.content, validated.title);
+
+    if (atomicUnits.length === 0) {
+      return res.status(400).json({ success: false, error: 'Decomposition produced no atomic units' });
+    }
+
+    // Step 2: Create parent meta-node (provenance tracking)
+    const parentId = uuid();
+    const parentTitle = validated.title || `Decomposed Document (${atomicUnits.length} units)`;
+
+    db.prepare(`
+      INSERT INTO brain_notes (id, user_id, pillar, title, body, created_by_type, created_by_id, is_pillar_root)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+    `).run(
+      parentId,
+      userId,
+      'projects',  // Default pillar for decomposed docs
+      parentTitle,
+      validated.content.slice(0, 10000),  // Store original content (truncated) for reference
+      'system',
+      'smz-decompose'
+    );
+
+    // Insert tags for parent via brain_tags table
+    const insertTag = db.prepare(
+      'INSERT OR IGNORE INTO brain_tags (id, note_id, tag) VALUES (?, ?, ?)'
+    );
+    insertTag.run(uuid(), parentId, 'smz-parent');
+    insertTag.run(uuid(), parentId, 'decomposed');
+
+    // Step 3: Create child atomic notes
+    const childIds: string[] = [];
+    const childResults: Array<{
+      id: string;
+      title: string;
+      confidence: number;
+      embedded: boolean;
+      contentLength: number;
+    }> = [];
+
+    for (const unit of atomicUnits) {
+      const childId = uuid();
+      childIds.push(childId);
+
+      db.prepare(`
+        INSERT INTO brain_notes (id, user_id, pillar, title, body, created_by_type, created_by_id, is_pillar_root)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+      `).run(
+        childId,
+        userId,
+        'projects',  // Gravity will organize - pillar is just initial landing
+        unit.title,
+        unit.content,
+        'system',
+        'smz-decompose'
+      );
+
+      // Insert tags for atomic unit
+      insertTag.run(uuid(), childId, 'smz-atomic');
+      insertTag.run(uuid(), childId, `confidence:${unit.confidence.toFixed(2)}`);
+
+      let embedded = false;
+
+      // Step 4: Auto-embed each atomic unit if requested
+      if (autoEmbed && unit.content.length >= 3) {
+        try {
+          const textToEmbed = `${unit.title}\n\n${unit.content}`.trim();
+          const embedding = await generateEmbedding(textToEmbed);
+          const embeddingBuffer = embeddingToBuffer(embedding);
+
+          db.prepare(`
+            UPDATE brain_notes
+            SET embedding = ?, embedding_model = ?, embedded_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(embeddingBuffer, EMBEDDING_MODEL, childId);
+
+          computeAndCacheSimilarities(childId, embedding, userId);
+          embedded = true;
+
+          // Rate limit between embeddings
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (embedErr) {
+          logger.error(`SMZ Decompose: Failed to embed unit ${childId}`, { error: String(embedErr) });
+        }
+      }
+
+      childResults.push({
+        id: childId,
+        title: unit.title,
+        confidence: unit.confidence,
+        embedded,
+        contentLength: unit.content.length
+      });
+    }
+
+    // Step 5: Create links from parent to all children
+    const linkStmt = db.prepare(`
+      INSERT OR IGNORE INTO brain_links (id, source_note_id, target_note_id, created_by)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    for (const childId of childIds) {
+      linkStmt.run(uuid(), parentId, childId, 'smz-decompose');
+    }
+
+    // Also embed the parent itself
+    if (autoEmbed) {
+      try {
+        const parentText = `${parentTitle}\n\n${validated.content}`.trim().slice(0, 32000);
+        const parentEmbedding = await generateEmbedding(parentText);
+        const parentBuffer = embeddingToBuffer(parentEmbedding);
+
+        db.prepare(`
+          UPDATE brain_notes
+          SET embedding = ?, embedding_model = ?, embedded_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(parentBuffer, EMBEDDING_MODEL, parentId);
+
+        computeAndCacheSimilarities(parentId, parentEmbedding, userId);
+      } catch (embedErr) {
+        logger.error('SMZ Decompose: Failed to embed parent node', { error: String(embedErr) });
+      }
+    }
+
+    const avgConfidence = atomicUnits.reduce((sum, u) => sum + u.confidence, 0) / atomicUnits.length;
+    const lowConfidenceCount = atomicUnits.filter(u => u.confidence < 0.7).length;
+
+    logger.info(`SMZ Decompose: Created ${atomicUnits.length} atomic units from parent ${parentId} (avg confidence: ${avgConfidence.toFixed(2)})`);
+
+    res.status(201).json({
+      success: true,
+      decomposition: {
+        parentId,
+        parentTitle,
+        atomicUnits: childResults,
+        stats: {
+          totalUnits: atomicUnits.length,
+          avgConfidence: Math.round(avgConfidence * 100) / 100,
+          lowConfidenceCount,
+          embeddedCount: childResults.filter(c => c.embedded).length,
+          totalContentChars: validated.content.length
+        }
+      }
+    });
+  } catch (err) {
+    logger.error('POST /decompose error', { error: String(err) });
+
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, error: 'Invalid request', details: err.errors });
+    }
+
+    res.status(500).json({ success: false, error: 'Decomposition failed' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMZ Phase 4 - Confidence Zones + Cluster Intelligence
+// Handle uncertainty gracefully. Context clusters with auto-labels.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── POST /nodes/:id/pin - Pin/unpin a node from gravitational movement ───────
+
+router.post('/nodes/:id/pin', requireAuth, (req: AuthRequest, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const noteId = req.params.id;
+    const { pinned } = req.body;  // boolean
+
+    const db = getDb();
+    const note = db.prepare('SELECT id FROM brain_notes WHERE id = ? AND user_id = ?').get(noteId, userId) as any;
+
+    if (!note) {
+      return res.status(404).json({ success: false, error: 'Note not found' });
+    }
+
+    // Store pin state via brain_tags table
+    if (pinned) {
+      db.prepare('INSERT OR IGNORE INTO brain_tags (id, note_id, tag) VALUES (?, ?, ?)')
+        .run(uuid(), noteId, 'smz-pinned');
+    } else {
+      db.prepare('DELETE FROM brain_tags WHERE note_id = ? AND tag = ?')
+        .run(noteId, 'smz-pinned');
+    }
+
+    db.prepare('UPDATE brain_notes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(noteId);
+
+    logger.info(`SMZ: Node ${noteId} ${pinned ? 'pinned' : 'unpinned'}`);
+
+    res.json({ success: true, noteId, pinned: !!pinned });
+  } catch (err) {
+    logger.error('POST /nodes/:id/pin error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Pin operation failed' });
+  }
+});
+
+// ─── GET /clusters - Computed context clusters from embedding space ───────────
+
+router.get('/clusters', requireAuth, (req: AuthRequest, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const db = getDb();
+    const minClusterSize = parseInt(req.query.minSize as string) || 2;
+
+    // Get all embedded notes
+    const notes = db.prepare(`
+      SELECT id, title, pillar, embedding, created_at
+      FROM brain_notes
+      WHERE user_id = ? AND embedding IS NOT NULL
+    `).all(userId) as any[];
+
+    if (notes.length < 2) {
+      return res.json({ success: true, clusters: [], unclustered: notes.map((n: any) => n.id) });
+    }
+
+    // Get all primary + secondary similarities for clustering
+    const similarities = db.prepare(`
+      SELECT s.note_a_id, s.note_b_id, s.similarity, s.tier
+      FROM smz_similarities s
+      JOIN brain_notes n ON n.id = s.note_a_id
+      WHERE n.user_id = ? AND s.tier IN ('primary', 'secondary')
+      ORDER BY s.similarity DESC
+    `).all(userId) as any[];
+
+    // Build adjacency for connected-component clustering
+    // (Simple but effective for <500 nodes - no fancy DBSCAN needed)
+    const adjacency: Record<string, Set<string>> = {};
+    for (const note of notes) {
+      adjacency[note.id] = new Set();
+    }
+
+    // Only use primary-tier links for clustering (strong connections)
+    for (const sim of similarities) {
+      if (sim.tier === 'primary' && adjacency[sim.note_a_id] && adjacency[sim.note_b_id]) {
+        adjacency[sim.note_a_id].add(sim.note_b_id);
+        adjacency[sim.note_b_id].add(sim.note_a_id);
+      }
+    }
+
+    // BFS connected components
+    const visited = new Set<string>();
+    const clusters: Array<{ id: string; noteIds: string[]; notes: any[] }> = [];
+    const unclustered: string[] = [];
+    let clusterIdx = 0;
+
+    for (const note of notes) {
+      if (visited.has(note.id)) continue;
+
+      const component: string[] = [];
+      const queue: string[] = [note.id];
+
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        if (visited.has(current)) continue;
+        visited.add(current);
+        component.push(current);
+
+        const neighbors = adjacency[current];
+        if (neighbors) {
+          for (const neighbor of neighbors) {
+            if (!visited.has(neighbor)) {
+              queue.push(neighbor);
+            }
+          }
+        }
+      }
+
+      if (component.length >= minClusterSize) {
+        const clusterNotes = component.map(id => {
+          const n = notes.find((note: any) => note.id === id);
+          return n ? { id: n.id, title: n.title, pillar: n.pillar } : null;
+        }).filter(Boolean);
+
+        clusters.push({
+          id: `cluster-${clusterIdx++}`,
+          noteIds: component,
+          notes: clusterNotes as any[]
+        });
+      } else {
+        unclustered.push(...component);
+      }
+    }
+
+    // Auto-label clusters based on most common words in titles
+    const labeledClusters = clusters.map(cluster => {
+      const titles = cluster.notes.map((n: any) => n.title);
+      const words = titles.join(' ').toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter((w: string) => w.length > 3 && !['the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'about'].includes(w));
+
+      const freq: Record<string, number> = {};
+      words.forEach((w: string) => { freq[w] = (freq[w] || 0) + 1; });
+      const topWords = Object.entries(freq)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([word]) => word);
+
+      const label = topWords.length > 0
+        ? topWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' + ')
+        : `Cluster ${cluster.id}`;
+
+      return {
+        ...cluster,
+        label,
+        size: cluster.noteIds.length,
+        pillars: [...new Set(cluster.notes.map((n: any) => n.pillar))]
+      };
+    });
+
+    logger.info(`SMZ Clusters: ${labeledClusters.length} clusters, ${unclustered.length} unclustered for user ${userId}`);
+
+    res.json({
+      success: true,
+      clusters: labeledClusters.map(c => ({
+        id: c.id,
+        label: c.label,
+        size: c.size,
+        noteIds: c.noteIds,
+        notes: c.notes,
+        pillars: c.pillars
+      })),
+      unclustered,
+      stats: {
+        totalNodes: notes.length,
+        clusteredNodes: notes.length - unclustered.length,
+        unclusteredNodes: unclustered.length,
+        clusterCount: labeledClusters.length
+      }
+    });
+  } catch (err) {
+    logger.error('GET /clusters error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Cluster computation failed' });
+  }
+});
+
+// ─── GET /clusters/:id/explain - Human-readable cluster reasoning ─────────────
+
+router.get('/clusters/:id/explain', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const clusterId = req.params.id;
+    const noteIds = (req.query.noteIds as string || '').split(',').filter(Boolean);
+
+    if (noteIds.length < 2) {
+      return res.status(400).json({ success: false, error: 'Provide at least 2 noteIds as comma-separated query param' });
+    }
+
+    const db = getDb();
+
+    // Fetch the notes in this cluster
+    const placeholders = noteIds.map(() => '?').join(',');
+    const notes = db.prepare(`
+      SELECT id, title, body FROM brain_notes
+      WHERE user_id = ? AND id IN (${placeholders})
+    `).all(userId, ...noteIds) as any[];
+
+    if (notes.length < 2) {
+      return res.status(404).json({ success: false, error: 'Could not find enough notes in cluster' });
+    }
+
+    // Get pairwise similarities within this cluster
+    const sims = db.prepare(`
+      SELECT note_a_id, note_b_id, similarity, tier
+      FROM smz_similarities
+      WHERE note_a_id IN (${placeholders}) AND note_b_id IN (${placeholders})
+      ORDER BY similarity DESC
+    `).all(...noteIds, ...noteIds) as any[];
+
+    // Build context for LLM explanation
+    const noteSummaries = notes.map((n: any) =>
+      `- "${n.title}": ${(n.body || '').slice(0, 200)}`
+    ).join('\n');
+
+    const avgSim = sims.length > 0
+      ? sims.reduce((sum: number, s: any) => sum + s.similarity, 0) / sims.length
+      : 0;
+
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      // Fallback: generate explanation without LLM
+      return res.json({
+        success: true,
+        clusterId,
+        explanation: `These ${notes.length} notes share strong semantic similarity (avg ${(avgSim * 100).toFixed(0)}%). They appear to discuss related concepts across ${[...new Set(notes.map((n: any) => n.pillar))].join(', ')} topics.`,
+        noteCount: notes.length,
+        avgSimilarity: Math.round(avgSim * 10000) / 10000
+      });
+    }
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'HTTP-Referer': 'https://borealisprotocol.ai',
+        'X-Title': 'Borealis Protocol - SMZ Cluster Explain'
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-haiku-3',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are Orion, a contextual AI partner. Explain in 1-2 sentences WHY these notes cluster together. Be specific about the shared theme. Do not list the notes. Speak as a thoughtful colleague giving insight.'
+          },
+          {
+            role: 'user',
+            content: `These notes formed a semantic cluster with average similarity ${(avgSim * 100).toFixed(0)}%:\n\n${noteSummaries}\n\nExplain the shared thread connecting them.`
+          }
+        ],
+        temperature: 0.5,
+        max_tokens: 200
+      })
+    });
+
+    let explanation: string;
+
+    if (response.ok) {
+      const data = await response.json() as any;
+      explanation = data.choices?.[0]?.message?.content || `These ${notes.length} notes share strong semantic overlap.`;
+    } else {
+      explanation = `These ${notes.length} notes share ${(avgSim * 100).toFixed(0)}% semantic similarity, suggesting a common theme.`;
+    }
+
+    res.json({
+      success: true,
+      clusterId,
+      explanation,
+      noteCount: notes.length,
+      avgSimilarity: Math.round(avgSim * 10000) / 10000,
+      notes: notes.map((n: any) => ({ id: n.id, title: n.title }))
+    });
+  } catch (err) {
+    logger.error('GET /clusters/:id/explain error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Cluster explanation failed' });
+  }
+});
+
+// ─── GET /gravity - Full gravitational field for frontend rendering ───────────
+
+router.get('/gravity', requireAuth, (req: AuthRequest, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const db = getDb();
+
+    // Get all embedded notes with their metadata
+    const notes = db.prepare(`
+      SELECT id, title, pillar, created_at, updated_at, embedded_at
+      FROM brain_notes
+      WHERE user_id = ? AND embedding IS NOT NULL
+    `).all(userId) as any[];
+
+    // Build tag lookup for smz-pinned and confidence tags
+    const tagRows = db.prepare(`
+      SELECT bt.note_id, bt.tag
+      FROM brain_tags bt
+      JOIN brain_notes bn ON bn.id = bt.note_id
+      WHERE bn.user_id = ? AND (bt.tag = 'smz-pinned' OR bt.tag LIKE 'confidence:%')
+    `).all(userId) as any[];
+
+    const noteTags: Record<string, string[]> = {};
+    for (const row of tagRows) {
+      if (!noteTags[row.note_id]) noteTags[row.note_id] = [];
+      noteTags[row.note_id].push(row.tag);
+    }
+
+    // Compute temporal decay for each note
+    const now = Date.now();
+    const nodesWithDecay = notes.map((n: any) => {
+      const tags: string[] = noteTags[n.id] || [];
+      const isPinned = tags.includes('smz-pinned');
+      const isLowConfidence = tags.some((t: string) => t.startsWith('confidence:') && parseFloat(t.split(':')[1]) < 0.7);
+
+      // Temporal decay: 7d=0.7x, 30d=0.4x, 90d=0.15x, pinned=no decay
+      let decayWeight = 1.0;
+      if (!isPinned) {
+        const ageMs = now - (n.updated_at || n.created_at);
+        const ageDays = ageMs / (1000 * 60 * 60 * 24);
+        if (ageDays > 90) decayWeight = 0.15;
+        else if (ageDays > 30) decayWeight = 0.4;
+        else if (ageDays > 7) decayWeight = 0.7;
+        else decayWeight = 1.0;
+      }
+
+      return {
+        id: n.id,
+        title: n.title,
+        pillar: n.pillar,
+        pinned: isPinned,
+        lowConfidence: isLowConfidence,
+        decayWeight: Math.round(decayWeight * 100) / 100,
+        createdAt: n.created_at,
+        updatedAt: n.updated_at,
+        embeddedAt: n.embedded_at
+      };
+    });
+
+    // Get all similarity links
+    const links = db.prepare(`
+      SELECT s.note_a_id, s.note_b_id, s.similarity, s.tier
+      FROM smz_similarities s
+      JOIN brain_notes n ON n.id = s.note_a_id
+      WHERE n.user_id = ? AND s.note_a_id < s.note_b_id
+      ORDER BY s.similarity DESC
+    `).all(userId) as any[];
+
+    // Get total unembedded count for coverage info
+    const unembedded = (db.prepare(
+      'SELECT COUNT(*) as count FROM brain_notes WHERE user_id = ? AND embedded_at IS NULL'
+    ).get(userId) as any).count;
+
+    res.json({
+      success: true,
+      field: {
+        nodes: nodesWithDecay,
+        links: links.map((l: any) => ({
+          source: l.note_a_id,
+          target: l.note_b_id,
+          similarity: Math.round(l.similarity * 10000) / 10000,
+          tier: l.tier
+        })),
+        stats: {
+          totalNodes: nodesWithDecay.length,
+          pinnedNodes: nodesWithDecay.filter(n => n.pinned).length,
+          lowConfidenceNodes: nodesWithDecay.filter(n => n.lowConfidence).length,
+          primaryLinks: links.filter((l: any) => l.tier === 'primary').length,
+          secondaryLinks: links.filter((l: any) => l.tier === 'secondary').length,
+          ambientLinks: links.filter((l: any) => l.tier === 'ambient').length,
+          unembeddedNodes: unembedded
+        }
+      }
+    });
+  } catch (err) {
+    logger.error('GET /gravity error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Gravity field query failed' });
+  }
+});
+
+// ─── POST /gravity/compute - Trigger full gravity recomputation ───────────────
+
+router.post('/gravity/compute', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const db = getDb();
+
+    // Get all embedded notes
+    const notes = db.prepare(`
+      SELECT id, embedding FROM brain_notes
+      WHERE user_id = ? AND embedding IS NOT NULL
+    `).all(userId) as any[];
+
+    if (notes.length < 2) {
+      return res.json({
+        success: true,
+        message: 'Not enough embedded notes for gravity computation',
+        stats: { notesProcessed: 0, pairsComputed: 0, pairsStored: 0 }
+      });
+    }
+
+    // Clear existing similarities for full recomputation
+    db.prepare(`
+      DELETE FROM smz_similarities WHERE note_a_id IN (
+        SELECT id FROM brain_notes WHERE user_id = ?
+      )
+    `).run(userId);
+
+    let pairsComputed = 0;
+    let pairsStored = 0;
+
+    const upsertStmt = db.prepare(`
+      INSERT INTO smz_similarities (note_a_id, note_b_id, similarity, tier, computed_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(note_a_id, note_b_id) DO UPDATE SET
+        similarity = excluded.similarity,
+        tier = excluded.tier,
+        computed_at = excluded.computed_at
+    `);
+
+    // Compute all pairwise similarities
+    const transaction = db.transaction(() => {
+      for (let i = 0; i < notes.length; i++) {
+        const embA = bufferToEmbedding(notes[i].embedding);
+
+        for (let j = i + 1; j < notes.length; j++) {
+          const embB = bufferToEmbedding(notes[j].embedding);
+          const similarity = cosineSimilarity(embA, embB);
+          pairsComputed++;
+
+          const tier = classifyTier(similarity);
+          if (tier) {
+            upsertStmt.run(notes[i].id, notes[j].id, similarity, tier);
+            upsertStmt.run(notes[j].id, notes[i].id, similarity, tier);
+            pairsStored += 2;
+          }
+        }
+      }
+    });
+
+    transaction();
+
+    logger.info(`SMZ Gravity: Recomputed ${pairsComputed} pairs, stored ${pairsStored} links for user ${userId}`);
+
+    res.json({
+      success: true,
+      stats: {
+        notesProcessed: notes.length,
+        pairsComputed,
+        pairsStored,
+        storageSaved: pairsComputed * 2 - pairsStored  // Pairs below threshold not stored
+      }
+    });
+  } catch (err) {
+    logger.error('POST /gravity/compute error', { error: String(err) });
+    res.status(500).json({ success: false, error: 'Gravity recomputation failed' });
+  }
+});
+
 export default router;
