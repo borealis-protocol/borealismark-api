@@ -2487,7 +2487,6 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_brain_notes_user ON brain_notes(user_id);
     CREATE INDEX IF NOT EXISTS idx_brain_notes_user_pillar ON brain_notes(user_id, pillar);
     CREATE INDEX IF NOT EXISTS idx_brain_notes_creator ON brain_notes(created_by_type, created_by_id);
-    CREATE INDEX IF NOT EXISTS idx_brain_notes_embedded ON brain_notes(embedded_at) WHERE embedded_at IS NULL;
 
     CREATE TABLE IF NOT EXISTS brain_links (
       id TEXT PRIMARY KEY,
@@ -2540,6 +2539,17 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_smz_sim_note_b ON smz_similarities(note_b_id, tier);
     CREATE INDEX IF NOT EXISTS idx_smz_sim_tier ON smz_similarities(tier);
   `);
+
+  // ── SMZ Column Migration (idempotent) ────────────────────────────────────────
+  // Production brain_notes may predate SMZ columns. CREATE TABLE IF NOT EXISTS
+  // does NOT add columns to existing tables. These ALTER TABLE statements are
+  // wrapped in try/catch so they silently succeed when columns already exist.
+  try { db.exec('ALTER TABLE brain_notes ADD COLUMN embedding BLOB'); } catch (_) { /* column exists */ }
+  try { db.exec('ALTER TABLE brain_notes ADD COLUMN embedding_model TEXT'); } catch (_) { /* column exists */ }
+  try { db.exec('ALTER TABLE brain_notes ADD COLUMN embedded_at DATETIME'); } catch (_) { /* column exists */ }
+
+  // Now safe to create the partial index on embedded_at
+  db.exec('CREATE INDEX IF NOT EXISTS idx_brain_notes_embedded ON brain_notes(embedded_at) WHERE embedded_at IS NULL');
 }
 
 // ─── User Queries ─────────────────────────────────────────────────────────────
