@@ -20,6 +20,15 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
 const migrate = db.transaction(() => {
+  // Verify brain_notes table exists
+  const tableCheck = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='brain_notes'"
+  ).get() as any;
+
+  if (!tableCheck) {
+    throw new Error('brain_notes table does not exist. Run add_brain_tables migration first.');
+  }
+
   // Check which columns already exist to make migration idempotent
   const tableInfo = db.prepare("PRAGMA table_info(brain_notes)").all() as any[];
   const existingColumns = new Set(tableInfo.map((col: any) => col.name));
