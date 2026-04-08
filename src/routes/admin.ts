@@ -24,6 +24,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { existsSync, statSync } from 'fs';
 import { requireAuth } from './auth';
+import { requireMasterKey } from '../middleware/auth';
 import { logger } from '../middleware/logger';
 import {
   getDb,
@@ -620,6 +621,41 @@ router.get('/backup/db', requireAuth, requireAdmin, (req: Request, res: Response
       error: 'Backup failed: ' + err.message,
       timestamp: Date.now(),
     });
+  }
+});
+
+// ── Database Download via Master Key (for automated backup scripts) ──────────
+// Authenticates with X-Master-Key header only — no JWT required.
+// Use this endpoint in cron jobs / backup scripts.
+router.get('/backup/db-download', requireMasterKey, (req: Request, res: Response) => {
+  try {
+    const { createReadStream } = require('fs');
+    const db = getDb();
+    const backupDir = process.env.BACKUP_DIR ?? '/tmp';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(backupDir, `borealis-backup-${timestamp}.db`);
+
+    db.exec(`VACUUM INTO '${backupPath}'`);
+
+    const stats = statSync(backupPath);
+    logger.info('Database backup downloaded via master key', {
+      path: backupPath,
+      sizeBytes: stats.size,
+      timestamp,
+    });
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="borealis-backup-${timestamp}.db"`);
+    res.setHeader('Content-Length', stats.size.toString());
+
+    const stream = createReadStream(backupPath);
+    stream.pipe(res);
+    stream.on('end', () => {
+      try { require('fs').unlinkSync(backupPath); } catch {}
+    });
+  } catch (err: any) {
+    logger.error('Database backup failed', { error: err.message });
+    res.status(500).json({ success: false, error: 'Backup failed: ' + err.message });
   }
 });
 
