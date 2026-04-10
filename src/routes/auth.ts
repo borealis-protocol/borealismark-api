@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { v4 as uuid } from 'uuid';
 import {
   createUser,
+  getDb,
   getUserByEmail,
   getUserById,
   updateUserLogin,
@@ -29,6 +30,7 @@ import {
   createEmailVerificationToken,
   getValidEmailVerificationToken,
 } from '../db/database';
+import { sendAccountDeletionEmail } from '../services/email';
 import { logger } from '../middleware/logger';
 import { authLimiter, passwordResetLimiter } from '../middleware/rateLimiter';
 import { events as eventBus } from '../services/eventBus';
@@ -711,6 +713,163 @@ router.post('/admin/create', async (req: Request, res: Response) => {
   } catch (err: any) {
     logger.error('Admin creation error', { error: err.message });
     res.status(500).json({ success: false, error: 'Admin creation failed' });
+  }
+});
+
+// ─── DELETE /account ─────────────────────────────────────────────────────────
+// Self-service account deletion. Requires password confirmation.
+// Cascades through all user data (same logic as admin delete).
+
+const deleteAccountSchema = z.object({
+  password: z.string().min(1, 'Password is required for account deletion'),
+});
+
+router.delete('/account', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const parsed = deleteAccountSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password confirmation required',
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const userId = (req as any).user.sub;
+    const user = getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // Prevent admin self-deletion via this route (use admin console)
+    if (user.role === 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin accounts must be deleted through the admin console' });
+    }
+
+    // Verify password
+    const dbUser = getDb().prepare('SELECT password_hash FROM users WHERE id = ?').get(userId) as any;
+    if (!dbUser) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const passwordValid = await bcrypt.compare(parsed.data.password, dbUser.password_hash);
+    if (!passwordValid) {
+      return res.status(401).json({ success: false, error: 'Incorrect password' });
+    }
+
+    const db = getDb();
+    db.pragma('foreign_keys = OFF');
+
+    const deletions: Record<string, number> = {};
+
+    try {
+      const tables = [
+        ['listing_likes', 'user_id'],
+        ['user_watchlist', 'user_id'],
+        ['marketplace_listings', 'user_id'],
+        ['user_trust_scores', 'user_id'],
+        ['bots', 'owner_id'],
+        ['user_badges', 'user_id'],
+        ['xp_transactions', 'user_id'],
+        ['ap_transactions', 'user_id'],
+        ['spark_progress', 'user_id'],
+        ['spark_purchases', 'user_id'],
+        ['user_progression', 'user_id'],
+        ['user_login_days', 'user_id'],
+        ['user_notifications', 'user_id'],
+        ['notification_preferences', 'user_id'],
+        ['daily_activity_log', 'user_id'],
+        ['user_violations', 'user_id'],
+        ['user_sanctions', 'user_id'],
+        ['user_verifications', 'user_id'],
+        ['api_keys', 'user_id'],
+        ['webhooks', 'user_id'],
+        ['api_usage', 'user_id'],
+        ['seller_storefronts', 'user_id'],
+        ['marketplace_carts', 'user_id'],
+        ['audit_requests', 'user_id'],
+        ['password_reset_tokens', 'user_id'],
+        ['email_verification_tokens', 'user_id'],
+        ['agents', 'owner_user_id'],
+        ['orion_conversations', 'user_id'],
+        ['orion_messages', 'user_id'],
+      ];
+
+      for (const [table, col] of tables) {
+        try {
+          deletions[table] = db.prepare(`DELETE FROM ${table} WHERE ${col} = ?`).run(userId).changes;
+        } catch (e) {
+          // Table may not exist - non-fatal
+        }
+      }
+
+      // Messages - delete via thread participation
+      try {
+        deletions.messages = db.prepare(
+          'DELETE FROM messages WHERE thread_id IN (SELECT id FROM message_threads WHERE participant_a = ? OR participant_b = ?)'
+        ).run(userId, userId).changes;
+        deletions.messageThreads = db.prepare('DELETE FROM message_threads WHERE participant_a = ? OR participant_b = ?').run(userId, userId).changes;
+      } catch (e) { /* non-fatal */ }
+
+      // Orders (as buyer or seller)
+      try {
+        deletions.orders = db.prepare('DELETE FROM marketplace_orders WHERE buyer_id = ? OR seller_id = ?').run(userId, userId).changes;
+      } catch (e) { /* non-fatal */ }
+
+      // Bot sub-tables
+      try {
+        db.prepare('DELETE FROM bot_reviews WHERE bot_id IN (SELECT id FROM bots WHERE owner_id = ?)').run(userId);
+        db.prepare('DELETE FROM bot_jobs WHERE bot_id IN (SELECT id FROM bots WHERE owner_id = ?)').run(userId);
+      } catch (e) { /* non-fatal */ }
+
+      // Support threads
+      try {
+        deletions.supportMessages = db.prepare(
+          "DELETE FROM support_messages WHERE thread_id IN (SELECT id FROM support_threads WHERE customer_email = ?)"
+        ).run(user.email).changes;
+        deletions.supportThreads = db.prepare("DELETE FROM support_threads WHERE customer_email = ?").run(user.email).changes;
+      } catch (e) { /* non-fatal */ }
+
+      // License data
+      try {
+        db.prepare('DELETE FROM license_audit_log WHERE license_id IN (SELECT id FROM licenses WHERE user_id = ?)').run(userId);
+        deletions.licenses = db.prepare('DELETE FROM licenses WHERE user_id = ?').run(userId).changes;
+      } catch (e) { /* non-fatal */ }
+
+      // Finally, delete the user
+      deletions.user = db.prepare('DELETE FROM users WHERE id = ?').run(userId).changes;
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
+
+    logger.info('User self-deleted account', {
+      deletedUserId: userId,
+      deletedEmail: user.email,
+      deletions,
+    });
+
+    // Clear auth cookie
+    res.clearCookie('bm_token', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'none',
+      path: '/',
+    });
+
+    // Fire-and-forget deletion notification
+    if (user.email) {
+      sendAccountDeletionEmail(user.email, user.name ?? '').catch(
+        (e: Error) => logger.warn('Account deletion email failed', { error: e.message }),
+      );
+    }
+
+    res.json({
+      success: true,
+      message: 'Your account and all associated data have been deleted',
+    });
+  } catch (err: any) {
+    logger.error('Self-delete account error', { error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to delete account' });
   }
 });
 
